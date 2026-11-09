@@ -115,9 +115,6 @@ The following list separates the intended first release from ideas that should c
 The intended system has two browser experiences, a Vaani Room backend, Nexconn's real-time chat and translation capabilities, and an application database.
 
 ```mermaid
-
-config:
-  theme: base
 flowchart TB
 
     subgraph CLIENT["Client Layer"]
@@ -158,7 +155,6 @@ flowchart TB
     SERVER --> CHAT
 
     LOGIC <-->|Translation| TRANSLATION
-
 ```
 
 ### Main component responsibilities
