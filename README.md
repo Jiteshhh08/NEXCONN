@@ -116,10 +116,8 @@ The intended system has two browser experiences, a Vaani Room backend, Nexconn's
 
 ```mermaid
 
----
 config:
-  theme: redux-color
----
+  theme: base
 flowchart TB
 
     subgraph CLIENT["Client Layer"]
