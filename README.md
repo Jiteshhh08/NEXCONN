@@ -298,7 +298,9 @@ name with safe placeholders.
 |---|---|---|
 | `APP_BASE_URL` | Server | Public origin used for join links and QR destinations |
 | `DATABASE_URL` | Server | Prisma connection string (`file:./dev.db` locally) |
-| `SESSION_SECRET` | Server only | Signs sessions and local transport tokens; required in production |
+| `SESSION_SECRET` | Server only | Signs sessions and local transport tokens; required at runtime in production |
+| `TRUSTED_PROXY_HEADER` | Server | Header set by your proxy for the client IP (`none`, `x-forwarded-for`, `x-real-ip`, `cf-connecting-ip`, `x-vercel-forwarded-for`) |
+| `TRUSTED_PROXY_HOPS` | Server | Number of trusted proxies in front of the app; used to pick the right address from a forwarding chain |
 | `NEXCONN_APP_KEY` | Server (safe to expose later) | Nexconn application identifier |
 | `NEXCONN_APP_SECRET` | **Server only** | Privileged Nexconn API calls. **Never expose this to the browser.** |
 | `NEXCONN_API_BASE_URL` | Server | Nexconn API base URL for the account region |
@@ -307,10 +309,16 @@ name with safe placeholders.
 | `TRANSLATION_PROVIDER` | Server | `passthrough`, `nexconn`, or `libretranslate` |
 | `LIBRETRANSLATE_URL` / `LIBRETRANSLATE_API_KEY` | Server | Optional LibreTranslate endpoint and key |
 
-`src/lib/env.ts` validates these at startup. Production refuses to start without
+`src/lib/env.ts` validates these at startup. Production startup fails without
 `SESSION_SECRET`, and `NEXCONN_CHAT_PROVIDER=nexconn` requires the App Key and
-Secret. The browser receives a short-lived user token from the backend; it never
-receives the App Secret.
+Secret. Runtime-only checks run from `src/instrumentation.ts`, so a production
+build does not need secrets that only exist in the deployed server. The browser
+receives a short-lived user token from the backend; it never receives the App
+Secret.
+
+Only set `TRUSTED_PROXY_HEADER` when a proxy you control overwrites that header.
+Otherwise leave it as `none`; the rate limiter then ignores client-supplied
+forwarding headers and uses one conservative bucket for those requests.
 
 - Keep real `.env` files out of Git; they are already in `.gitignore`.
 - Commit `.env.example` with variable names and safe placeholders only.

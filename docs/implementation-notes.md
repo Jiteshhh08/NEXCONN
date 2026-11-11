@@ -90,11 +90,12 @@ src/
 │   ├── chat/contracts.ts       Chat provider/client interfaces
 │   ├── translation/contracts.ts Translation provider interfaces
 │   ├── domain.ts               Roles, statuses, 12 languages
-│   ├── env.ts                  Zod env validation + production guards
+│   ├── env.ts                  Zod env validation + runtime guards
 │   ├── validation.ts           Request schemas
 │   ├── format.ts               Date formatting
 │   ├── db.ts                   Prisma singleton
 │   └── utils.ts                cn()
+├── instrumentation.ts          Runtime startup checks (secrets)
 └── server/
     ├── auth/
     │   ├── password.ts         scrypt hash + verify
@@ -213,8 +214,14 @@ on a concrete provider.
   SHA-256 hash is stored in `SESSION`.
 - Session lifetime is 7 days. Expired rows are deleted on lookup.
 - Registration and login are rate-limited per client key (5 per 15 minutes and
-  10 per 15 minutes respectively). The limiter is in-process and should be
-  replaced with a shared store for multi-instance deployments.
+  10 per 15 minutes respectively). The limiter is in-process, sweeps expired
+  buckets, and caps storage at 10,000 keys so a flood of distinct keys cannot
+  grow memory without bound. It should still be replaced with a shared store
+  for multi-instance deployments.
+- Client IPs are only read from `TRUSTED_PROXY_HEADER` when that variable names
+  a header the deployment proxy overwrites. `TRUSTED_PROXY_HOPS` selects the
+  right entry from a forwarding chain. With the default `none`, forwarding
+  headers are ignored and requests share one conservative bucket.
 - State-changing API routes check `Origin` when the browser sends it.
 
 Routes: `POST /api/auth/register`, `POST /api/auth/login`,
@@ -315,6 +322,21 @@ End-to-end smoke test performed against the dev server:
 
 Manual layout checks: `/`, `/host/login`, `/host/register`, `/host`,
 `/host/rooms/<code>`, `/join`, `/join/<code>` at 360 px and 1440 px widths.
+
+Hardening checks (Phase 1 review fixes):
+
+- A production build with `NODE_ENV=production` and no `SESSION_SECRET` completes
+  route collection and static generation successfully.
+- `next start` without `SESSION_SECRET`, or with one shorter than 32
+  characters, exits with code 1 and a clear message before serving traffic.
+  With a valid secret it starts and `GET /api/health` returns 200.
+- With the default `TRUSTED_PROXY_HEADER="none"`, six registration attempts
+  carrying six different spoofed `X-Forwarded-For` values returned
+  `201,201,201,201,201,429`: the header is ignored and all requests share one
+  bucket.
+- With `TRUSTED_PROXY_HEADER="x-forwarded-for"` and `TRUSTED_PROXY_HOPS="1"`,
+  five attempts from one IP were allowed, the sixth from that IP returned 429,
+  and an attempt from a different IP returned 201.
 
 ---
 

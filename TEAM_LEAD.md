@@ -67,6 +67,8 @@ Copy `.env.example` to `.env`. **Never commit `.env`.**
 | `APP_BASE_URL` | Server | Join links, QR destinations, webhook URL | No |
 | `DATABASE_URL` | Server | Prisma database connection | Yes (production) |
 | `SESSION_SECRET` | Server | Session cookies and local transport tokens | **Yes** |
+| `TRUSTED_PROXY_HEADER` | Server | Client-IP header written by the deployment proxy | No |
+| `TRUSTED_PROXY_HOPS` | Server | Number of trusted proxies in front of the app | No |
 | `NEXCONN_APP_KEY` | Server now; safe public config later | Browser SDK initialization | No |
 | `NEXCONN_APP_SECRET` | **Server only** | Privileged Nexconn API calls | **YES — never expose** |
 | `NEXCONN_API_BASE_URL` | Server | Nexconn server API base URL / region | No |
@@ -84,7 +86,12 @@ Rules:
   Nexconn Console immediately.
 - Use separate Nexconn applications/credentials for development and production.
 - `src/lib/env.ts` rejects production startup when `SESSION_SECRET` is missing,
-  and rejects `NEXCONN_CHAT_PROVIDER=nexconn` without the App Key/Secret.
+  and rejects `NEXCONN_CHAT_PROVIDER=nexconn` without the App Key/Secret. These
+  runtime checks run from `src/instrumentation.ts`, so `next build` does not
+  need deployment-only secrets.
+- Rate limiting only trusts a client-IP header when `TRUSTED_PROXY_HEADER` is
+  set to the header your proxy overwrites. Leave it `none` for direct exposure;
+  never trust `x-forwarded-for` from arbitrary clients.
 
 ---
 
