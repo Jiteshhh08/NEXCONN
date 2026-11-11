@@ -1,0 +1,201 @@
+import "server-only";
+
+import { Prisma } from "@prisma/client";
+
+import { AppError } from "@/lib/api/errors";
+import { prisma } from "@/lib/db";
+import type { RoomStatus } from "@/lib/domain";
+import type { CreateRoomInput } from "@/lib/validation";
+import { getChatProvider } from "@/server/chat";
+
+import { generateJoinCode } from "./join-code";
+
+const roomSelection = {
+  id: true,
+  title: true,
+  joinCode: true,
+  status: true,
+  hostLanguage: true,
+  nexconnChannelId: true,
+  createdAt: true,
+  closedAt: true,
+} satisfies Prisma.RoomSelect;
+
+type RoomRow = Prisma.RoomGetPayload<{ select: typeof roomSelection }>;
+
+export interface HostRoom {
+  id: string;
+  title: string;
+  joinCode: string;
+  status: RoomStatus;
+  hostLanguage: string;
+  nexconnChannelId: string | null;
+  createdAt: Date;
+  closedAt: Date | null;
+  questionCount: number;
+  participantCount: number;
+}
+
+export interface PublicRoom {
+  id: string;
+  title: string;
+  joinCode: string;
+  status: RoomStatus;
+  hostLanguage: string;
+  hostName: string;
+  participantCount: number;
+  createdAt: Date;
+  closedAt: Date | null;
+}
+
+function toStatus(value: string): RoomStatus {
+  return value === "closed" ? "closed" : "active";
+}
+
+function isJoinCodeCollision(error: unknown): boolean {
+  return (
+    error instanceof Prisma.PrismaClientKnownRequestError &&
+    error.code === "P2002"
+  );
+}
+
+export async function createRoomForHost(
+  hostUserId: string,
+  input: CreateRoomInput,
+): Promise<HostRoom> {
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const joinCode = generateJoinCode();
+
+    try {
+      const created = await prisma.room.create({
+        data: {
+          hostUserId,
+          title: input.title,
+          hostLanguage: input.hostLanguage,
+          joinCode,
+        },
+        select: roomSelection,
+      });
+
+      try {
+        const channel = await getChatProvider().createChannel({
+          roomId: created.id,
+          title: created.title,
+        });
+
+        const room = await prisma.room.update({
+          where: { id: created.id },
+          data: { nexconnChannelId: channel.channelId },
+          select: roomSelection,
+        });
+
+        return mapHostRoom(room);
+      } catch (error) {
+        // Do not leave a room without its live channel behind.
+        await prisma.room
+          .delete({ where: { id: created.id } })
+          .catch(() => undefined);
+        throw error;
+      }
+    } catch (error) {
+      if (isJoinCodeCollision(error) && attempt < 7) continue;
+      throw error;
+    }
+  }
+
+  throw new AppError(
+    "CONFLICT",
+    "A room code could not be allocated. Please try again.",
+    503,
+  );
+}
+
+function mapHostRoom(room: RoomRow & { _count?: { questions: number; participants: number } }): HostRoom {
+  return {
+    id: room.id,
+    title: room.title,
+    joinCode: room.joinCode,
+    status: toStatus(room.status),
+    hostLanguage: room.hostLanguage,
+    nexconnChannelId: room.nexconnChannelId,
+    createdAt: room.createdAt,
+    closedAt: room.closedAt,
+    questionCount: room._count?.questions ?? 0,
+    participantCount: room._count?.participants ?? 0,
+  };
+}
+
+export async function listRoomsForHost(hostUserId: string): Promise<HostRoom[]> {
+  const rooms = await prisma.room.findMany({
+    where: { hostUserId },
+    orderBy: { createdAt: "desc" },
+    select: {
+      ...roomSelection,
+      _count: { select: { questions: true, participants: true } },
+    },
+  });
+
+  return rooms.map(mapHostRoom);
+}
+
+export async function getRoomForHost(
+  joinCode: string,
+  hostUserId: string,
+): Promise<HostRoom | null> {
+  const room = await prisma.room.findFirst({
+    where: { joinCode, hostUserId },
+    select: {
+      ...roomSelection,
+      _count: { select: { questions: true, participants: true } },
+    },
+  });
+
+  return room ? mapHostRoom(room) : null;
+}
+
+export async function getPublicRoomByCode(
+  joinCode: string,
+): Promise<PublicRoom | null> {
+  const room = await prisma.room.findUnique({
+    where: { joinCode },
+    select: {
+      id: true,
+      title: true,
+      joinCode: true,
+      status: true,
+      hostLanguage: true,
+      createdAt: true,
+      closedAt: true,
+      host: { select: { displayName: true } },
+      _count: { select: { participants: true } },
+    },
+  });
+
+  if (!room) return null;
+
+  return {
+    id: room.id,
+    title: room.title,
+    joinCode: room.joinCode,
+    status: toStatus(room.status),
+    hostLanguage: room.hostLanguage,
+    hostName: room.host.displayName ?? "Your host",
+    participantCount: room._count.participants,
+    createdAt: room.createdAt,
+    closedAt: room.closedAt,
+  };
+}
+
+export async function getHostOverview(hostUserId: string): Promise<{
+  activeRooms: number;
+  totalQuestions: number;
+  totalParticipants: number;
+}> {
+  const [activeRooms, totalQuestions, totalParticipants] = await Promise.all([
+    prisma.room.count({ where: { hostUserId, status: "active" } }),
+    prisma.question.count({ where: { room: { hostUserId } } }),
+    prisma.participant.count({ where: { room: { hostUserId } } }),
+  ]);
+
+  return { activeRooms, totalQuestions, totalParticipants };
+}

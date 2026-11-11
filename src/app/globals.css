@@ -1,0 +1,117 @@
+@import "tailwindcss";
+
+@theme {
+  --color-background: #f7f4ee;
+  --color-foreground: #1c1a17;
+  --color-card: #fffdf8;
+  --color-card-foreground: #1c1a17;
+  --color-muted: #efe9dd;
+  --color-muted-foreground: #6b655a;
+  --color-border: #e2dbcd;
+  --color-primary: #0f5c53;
+  --color-primary-strong: #0a453e;
+  --color-primary-foreground: #f6fffc;
+  --color-accent: #d9842a;
+  --color-accent-soft: #f8e7cd;
+  --color-accent-foreground: #2a1a08;
+  --color-success: #1f7a4d;
+  --color-danger: #b42318;
+  --color-warning: #a15c00;
+
+  --font-sans: "Inter", "Segoe UI", "Noto Sans", "Noto Sans Devanagari",
+    "Nirmala UI", system-ui, -apple-system, sans-serif;
+  --font-display: "Iowan Old Style", "Palatino Linotype", "Book Antiqua",
+    Georgia, "Times New Roman", serif;
+
+  --shadow-soft: 0 24px 70px -40px rgba(28, 26, 23, 0.45);
+  --shadow-lift: 0 18px 40px -24px rgba(15, 92, 83, 0.35);
+}
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  ::selection {
+    background-color: var(--color-primary);
+    color: var(--color-primary-foreground);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 3px;
+  }
+
+  h1,
+  h2,
+  h3 {
+    text-wrap: balance;
+  }
+
+  p {
+    text-wrap: pretty;
+  }
+}
+
+@layer components {
+  .page-aurora {
+    background-image:
+      radial-gradient(
+        55rem 38rem at 10% -12%,
+        rgba(15, 92, 83, 0.1),
+        transparent 62%
+      ),
+      radial-gradient(
+        45rem 30rem at 92% -4%,
+        rgba(217, 132, 42, 0.13),
+        transparent 58%
+      );
+  }
+
+  .grid-paper {
+    background-image:
+      linear-gradient(rgba(28, 26, 23, 0.045) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(28, 26, 23, 0.045) 1px, transparent 1px);
+    background-size: 28px 28px;
+  }
+
+  .skip-link {
+    position: fixed;
+    top: -100px;
+    left: 1rem;
+    z-index: 100;
+    border-radius: 9999px;
+    background-color: var(--color-primary);
+    color: var(--color-primary-foreground);
+    padding: 0.65rem 1rem;
+    font-size: 0.875rem;
+    font-weight: 600;
+    transition: top 150ms ease;
+  }
+
+  .skip-link:focus {
+    top: 1rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
