@@ -219,8 +219,9 @@ on a concrete provider.
   grow memory without bound. It should still be replaced with a shared store
   for multi-instance deployments.
 - Client IPs are only read from `TRUSTED_PROXY_HEADER` when that variable names
-  a header the deployment proxy overwrites. `TRUSTED_PROXY_HOPS` selects the
-  right entry from a forwarding chain. With the default `none`, forwarding
+  a header the deployment proxy overwrites. For a comma-separated chain,
+  `TRUSTED_PROXY_HOPS` selects the client at `parts.length - hops - 1`; a
+  single bare IP is accepted as the client. With the default `none`, forwarding
   headers are ignored and requests share one conservative bucket.
 - State-changing API routes check `Origin` when the browser sends it.
 
@@ -299,12 +300,13 @@ Commands (Windows PowerShell; use `npm.cmd`/`npx.cmd` if the execution policy
 blocks the shims):
 
 ```bash
+npm.cmd run test
 npm.cmd run typecheck
 npm.cmd run lint
 npm.cmd run build
 ```
 
-Expected Phase 1 result: all three pass. `GET /api/health` returns
+Expected Phase 1 result: all four pass. `GET /api/health` returns
 `{ "ok": true, "data": { "status": "ok", "database": "connected", … } }`.
 
 End-to-end smoke test performed against the dev server:
@@ -337,6 +339,9 @@ Hardening checks (Phase 1 review fixes):
 - With `TRUSTED_PROXY_HEADER="x-forwarded-for"` and `TRUSTED_PROXY_HOPS="1"`,
   five attempts from one IP were allowed, the sixth from that IP returned 429,
   and an attempt from a different IP returned 201.
+- `npm run test` covers single-IP headers, one- and two-hop chains, chains that
+  are too short, invalid chain entries, single-address headers, IPv6, and
+  oversized headers.
 
 ---
 
@@ -349,7 +354,8 @@ Hardening checks (Phase 1 review fixes):
    commits.
 4. ESLint can appear to hang on a cold run while it resolves the flat config;
    the second run is fast.
-5. No automated tests yet — Phase 9 adds them.
+5. Only focused unit tests for trusted client-IP resolution exist; broader
+   coverage arrives in Phase 9.
 6. The rate limiter is in-process. Replace it with a shared store before running
    more than one server instance.
 7. There is no email verification or password-reset flow yet; registration is

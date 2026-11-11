@@ -273,6 +273,7 @@ On Windows, if the PowerShell execution policy blocks `npm`, use `npm.cmd` and
 | `npm run start` | Serve the production build |
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm run lint` | ESLint flat config |
+| `npm run test` | Focused unit tests (Node test runner via `tsx`) |
 | `npm run db:migrate` | `prisma migrate dev` |
 | `npm run db:studio` | Prisma Studio |
 | `npm run db:reset` | Reset the local database |

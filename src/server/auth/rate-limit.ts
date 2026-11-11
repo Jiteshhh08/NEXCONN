@@ -1,8 +1,8 @@
 import "server-only";
 
-import { isIP } from "node:net";
-
 import { serverEnv } from "@/lib/env";
+
+import { resolveClientIp } from "./client-ip";
 
 interface Bucket {
   count: number;
@@ -13,14 +13,6 @@ interface Bucket {
 // key. At roughly 100 bytes per entry this is a few megabytes at most.
 const MAX_BUCKETS = 10_000;
 const SWEEP_INTERVAL_MS = 60_000;
-// Forwarding headers are normally short. Reject absurd values before parsing.
-// 1 KiB still fits a chain of 10 maximum-length IPv6 addresses.
-const MAX_IP_HEADER_LENGTH = 1024;
-// Headers whose value is a comma-separated chain of addresses.
-const CHAINED_PROXY_HEADERS = new Set([
-  "x-forwarded-for",
-  "x-vercel-forwarded-for",
-]);
 
 const buckets = new Map<string, Bucket>();
 let lastSweepAt = 0;
@@ -89,40 +81,19 @@ export function checkRateLimit(
 }
 
 /**
- * Resolves the client address from a header that a proxy we control is
- * expected to set. Returns null when no trusted source is configured or the
- * value is not a bare IP address, so spoofed or malformed headers can never
- * create distinct buckets.
+ * Reads the client address from the deployment's trusted proxy header, if one
+ * is configured. Returns null when no trusted source is available so callers
+ * can use the conservative shared bucket.
  */
-function resolveClientIp(request: Request): string | null {
+function getTrustedClientIp(request: Request): string | null {
   const headerName = serverEnv.TRUSTED_PROXY_HEADER;
   if (headerName === "none") return null;
 
-  const raw = request.headers.get(headerName);
-  if (!raw) return null;
-
-  const value = raw.trim();
-  if (!value || value.length > MAX_IP_HEADER_LENGTH) return null;
-
-  if (!CHAINED_PROXY_HEADERS.has(headerName)) {
-    // A single-address header must contain exactly one valid IP.
-    return isIP(value) ? value : null;
-  }
-
-  const parts = value
-    .split(",")
-    .map((part) => part.trim())
-    .filter(Boolean);
-  if (parts.length === 0) return null;
-
-  // The entries appended nearest to this server are the ones written by our
-  // trusted proxies. Anything to the left of that position may be supplied by
-  // the client, so count back from the end by the configured hop count.
-  const index = parts.length - serverEnv.TRUSTED_PROXY_HOPS;
-  const candidate = parts[index];
-  if (!candidate || !isIP(candidate)) return null;
-
-  return candidate;
+  return resolveClientIp(
+    headerName,
+    serverEnv.TRUSTED_PROXY_HOPS,
+    request.headers.get(headerName),
+  );
 }
 
 /**
@@ -131,6 +102,6 @@ function resolveClientIp(request: Request): string | null {
  * key: one conservative bucket is safer than letting clients choose their own.
  */
 export function getClientKey(request: Request, scope: string): string {
-  const ip = resolveClientIp(request);
+  const ip = getTrustedClientIp(request);
   return `${scope}:${ip ?? "untrusted"}`;
 }
