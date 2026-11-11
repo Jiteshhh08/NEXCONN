@@ -1,0 +1,39 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.*
+
+# Next.js
+.next/
+out/
+build/
+next-env.d.ts
+
+# Environment (never commit real values)
+.env
+.env.*
+!.env.example
+
+# Database
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+prisma/dev.db*
+
+# Testing and coverage
+coverage/
+playwright-report/
+test-results/
+
+# Misc
+.DS_Store
+Thumbs.db
+*.log
+npm-debug.log*
+.vercel
+.idea/
+.vscode/
+
+# TypeScript
+*.tsbuildinfo

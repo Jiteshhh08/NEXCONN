@@ -4,7 +4,15 @@
 
 Vaani Room is a proposed multilingual, browser-based live Q&A platform for classrooms, lectures, workshops, and events. Students join a room through a QR code, choose a preferred language, and submit questions. The lecturer views questions in the host language, moderates the queue, and responds. Students can then read answers in their chosen languages.
 
-> **Project status:** Hackathon project in development. This README describes the intended product and proposed design. Features should not be considered implemented until they are built and tested in the project.
+> **Project status:** In development. Phase 1 (host authentication, room
+> creation, QR codes, public room lookup) is implemented and verified. Feature
+> routes are being built in phases; the roadmap below marks what exists.
+> Nothing is claimed as working until it is implemented and tested.
+>
+> - **[TEAM_LEAD.md](TEAM_LEAD.md)** — credential checklist, Nexconn Console
+>   setup, integration seams, and production requirements.
+> - **[docs/implementation-notes.md](docs/implementation-notes.md)** — actual
+>   stack decisions, conventions, and phase log.
 
 ---
 
@@ -20,11 +28,12 @@ Vaani Room is a proposed multilingual, browser-based live Q&A platform for class
 - [Repository structure](#repository-structure)
 - [Getting started](#getting-started)
 - [Configuration and secrets](#configuration-and-secrets)
-- [Proposed API](#proposed-api)
+- [API routes](#api-routes)
 - [Data model](#data-model)
 - [Security, privacy, and reliability](#security-privacy-and-reliability)
 - [Development roadmap](#development-roadmap)
 - [Testing checklist](#testing-checklist)
+- [Team handoff](#team-handoff)
 - [Contributing](#contributing)
 
 ---
@@ -81,8 +90,10 @@ The following list separates the intended first release from ideas that should c
 
 ### Core MVP scope
 
-- [ ] Create and close a live room as a lecturer/host.
-- [ ] Generate a room join link and QR code.
+- [x] Create a live room as a lecturer/host.
+- [ ] Close a live room as a lecturer/host.
+- [x] Create a host account and sign in with a DB-backed session.
+- [x] Generate a room join link and QR code.
 - [ ] Join a room from a mobile or desktop browser.
 - [ ] Select a preferred language.
 - [ ] Submit and receive live questions using Nexconn Chat SDK.
@@ -172,83 +183,171 @@ For the full design, component notes, workflows, database model, API responsibil
 
 ## Technology
 
-The architecture currently identifies Nexconn Chat SDK as the real-time messaging layer. The exact frontend framework, backend framework, database product, and hosting provider should be recorded here once the team selects and implements them.
+The stack is now fixed for the MVP. Version numbers match `package.json`.
 
-| Area | Current direction | Status |
+| Area | Choice | Status |
 |---|---|---|
-| User interface | Responsive browser-based web app / PWA | Proposed |
-| Real-time messaging | Nexconn Chat SDK using Open Channels | Planned integration |
-| Translation | Nexconn built-in translation capability | Planned integration; requires Console configuration and testing |
-| Backend | Server-side API for room management, authorization, votes, moderation, and Nexconn server operations | Framework not yet specified |
-| Database | Relational database for persistent application records | Product not yet specified |
-| Hosting | Frontend and backend hosting with HTTPS | Provider not yet specified |
+| Framework | Next.js 16.4.6 (App Router, Turbopack) | Implemented |
+| UI | React 19.3.1, Tailwind CSS 4.3.5, local components | Implemented |
+| Language | TypeScript 5.9.3 (strict) | Implemented |
+| Backend | Next.js Route Handlers under `/api/*` | Health, auth, and rooms implemented; question routes in progress |
+| Database | Prisma 6.19.3, SQLite locally, Postgres for production | Schema + migration implemented |
+| Validation | Zod 4.6.7 | Implemented |
+| Real-time messaging | Nexconn Chat SDK using Open Channels | Adapter contract implemented; integration pending credentials |
+| Translation | Nexconn built-in translation | Adapter contract implemented; passthrough fallback in dev |
+| QR codes | `qrcode` package | Implemented (server-generated join QR) |
+| Hosting | HTTPS host with a long-lived Node runtime | Not yet selected |
 
-Update this table when implementation choices are final. Do not list a technology as part of the stack merely because it appears in an example or an early diagram.
+Why these versions: Next 16 removes the PostCSS advisories present in Next 15;
+Prisma 6 avoids a breaking major upgrade. Full reasoning is in
+[docs/implementation-notes.md](docs/implementation-notes.md).
 
 ## Repository structure
 
-The repository may be organized like this as the project grows. Adjust it to match the actual codebase:
+The repository is organized like this:
 
 ```text
 vaani-room/
 ├── docs/
-│   ├── architecture.md
-│   ├── use-cases.md              # Optional: detailed use-case notes
-│   └── api-design.md             # Optional: API request/response contracts
-├── public/                       # Static assets, including a logo if added
-├── src/                          # Application source code (if using this layout)
-├── .env.example                  # Names of required environment variables; no secrets
-├── .gitignore
+│   ├── architecture.md           # Design authority
+│   └── implementation-notes.md   # Stack decisions, conventions, phase log
+├── prisma/
+│   ├── schema.prisma             # Full ERD model
+│   ├── migrations/               # Applied SQLite baseline
+│   └── dev.db                    # Local only, gitignored
+├── src/
+│   ├── app/                      # Routes, layout, Route Handlers
+│   │   ├── api/auth/             # Register, login, logout, me
+│   │   ├── api/rooms/            # Create and list host rooms
+│   │   ├── api/health/           # GET /api/health
+│   │   ├── host/                 # Sign in/up, dashboard, room QR view
+│   │   └── join/                 # Code entry and public room lookup
+│   ├── components/               # Auth, host, join, brand, marketing, UI
+│   ├── lib/                      # Domain, env, validation, API envelope
+│   └── server/                   # Auth, rooms, chat/translation adapters
+├── .env.example                  # Variable names and safe placeholders
+├── TEAM_LEAD.md                  # Handoff and Nexconn integration guide
 └── README.md
 ```
-
-This is a suggested structure, not a requirement. Frameworks such as Next.js, Vite, or other tooling may generate a different source layout.
 
 ## Getting started
 
 ### Prerequisites
 
-The exact prerequisites depend on the frameworks and database selected by the team. Before adding setup commands here, document the versions actually used by the repository, such as:
-
-- Required runtime and version.
-- Package manager and version.
-- Database engine and local/cloud setup method.
-- Nexconn account, application, and Chat SDK credentials/configuration.
+- **Node.js 20.9 or newer** (developed on Node 24).
+- **npm 10 or newer**.
+- No database server is required locally: SQLite ships with Prisma.
 
 ### Setup
 
-The framework-specific install and run commands have not been finalized in this design document. Once the application scaffold is committed, replace this section with the exact verified commands. A typical setup sequence will be:
+```bash
+# 1. Install dependencies
+npm install
 
-1. Clone the repository.
-2. Install dependencies using the repository's package manager.
-3. Create a local environment file from `.env.example`.
-4. Configure the database and apply migrations, if applicable.
-5. Configure the Nexconn application and server-side credentials.
-6. Start the backend and frontend using the project's documented scripts.
+# 2. Create your local environment file
+#    Copy .env.example to .env, then set SESSION_SECRET.
+#    Generate a secret with:
+node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
 
-Do not copy generic commands from another framework; use the scripts defined in this repository's `package.json`, Makefile, or equivalent project configuration.
+# 3. Apply the database migration
+npx prisma migrate dev
+
+# 4. Start the app
+npm run dev
+```
+
+Open `http://localhost:3000`. Create the first host account at
+`http://localhost:3000/host/register`, then open the dashboard at `/host`.
+Health check: `http://localhost:3000/api/health` returns
+`{ "ok": true, "data": { "status": "ok", "database": "connected", … } }`.
+
+On Windows, if the PowerShell execution policy blocks `npm`, use `npm.cmd` and
+`npx.cmd` instead.
+
+### Scripts
+
+| Command | Purpose |
+|---|---|
+| `npm run dev` | Development server (Turbopack) |
+| `npm run build` | Production build |
+| `npm run start` | Serve the production build |
+| `npm run typecheck` | `tsc --noEmit` |
+| `npm run lint` | ESLint flat config |
+| `npm run test` | Focused unit tests (Node test runner via `tsx`) |
+| `npm run db:migrate` | `prisma migrate dev` |
+| `npm run db:studio` | Prisma Studio |
+| `npm run db:reset` | Reset the local database |
+
+### Working without Nexconn credentials
+
+The application runs with `NEXCONN_CHAT_PROVIDER="local"` and
+`TRANSLATION_PROVIDER="passthrough"`:
+
+- the local chat provider signs short-lived development tokens;
+- the passthrough translator never fabricates a translation — it reports
+  `unavailable` and the UI keeps the original text visible.
+
+These are development scaffolding. See [TEAM_LEAD.md](TEAM_LEAD.md) for the
+real integration.
 
 ## Configuration and secrets
 
-The application will need configuration for its chosen database and Nexconn app. The names below are suggested application environment variable names; align them with the actual implementation.
+All configuration lives in `.env` (gitignored). `.env.example` documents every
+name with safe placeholders.
 
-| Suggested variable | Where it belongs | Purpose |
+| Variable | Scope | Purpose |
 |---|---|---|
-| `NEXCONN_APP_KEY` | Client configuration, if required by the SDK; may also be exposed through a safe public config endpoint | Identifies the Nexconn application. |
-| `NEXCONN_APP_SECRET` | Backend only | Used for privileged server-side Nexconn operations. **Never expose this to the browser.** |
-| `DATABASE_URL` | Backend only | Database connection string. |
-| `APP_BASE_URL` | Backend / deployment config | Public base URL used to construct room links and QR destinations. |
+| `APP_BASE_URL` | Server | Public origin used for join links and QR destinations |
+| `DATABASE_URL` | Server | Prisma connection string (`file:./dev.db` locally) |
+| `SESSION_SECRET` | Server only | Signs sessions and local transport tokens; required at runtime in production |
+| `TRUSTED_PROXY_HEADER` | Server | Header set by your proxy for the client IP (`none`, `x-forwarded-for`, `x-real-ip`, `cf-connecting-ip`, `x-vercel-forwarded-for`) |
+| `TRUSTED_PROXY_HOPS` | Server | Number of trusted proxies in front of the app; used to pick the right address from a forwarding chain |
+| `NEXCONN_APP_KEY` | Server (safe to expose later) | Nexconn application identifier |
+| `NEXCONN_APP_SECRET` | **Server only** | Privileged Nexconn API calls. **Never expose this to the browser.** |
+| `NEXCONN_API_BASE_URL` | Server | Nexconn API base URL for the account region |
+| `NEXCONN_WEBHOOK_SECRET` | Server only | Webhook signature verification |
+| `NEXCONN_CHAT_PROVIDER` | Server | `local` (development) or `nexconn` |
+| `TRANSLATION_PROVIDER` | Server | `passthrough`, `nexconn`, or `libretranslate` |
+| `LIBRETRANSLATE_URL` / `LIBRETRANSLATE_API_KEY` | Server | Optional LibreTranslate endpoint and key |
 
-Depending on the final SDK integration, the client may also receive a short-lived or user-specific Nexconn access token from the backend. Do not hardcode tokens or secrets in source files.
+`src/lib/env.ts` validates these at startup. Production startup fails without
+`SESSION_SECRET`, and `NEXCONN_CHAT_PROVIDER=nexconn` requires the App Key and
+Secret. Runtime-only checks run from `src/instrumentation.ts`, so a production
+build does not need secrets that only exist in the deployed server. The browser
+receives a short-lived user token from the backend; it never receives the App
+Secret.
 
-- Keep real `.env` files out of Git; add them to `.gitignore`.
-- Commit `.env.example` with variable names and safe placeholder values only.
+Only set `TRUSTED_PROXY_HEADER` when a proxy you control overwrites that header.
+Otherwise leave it as `none`; the rate limiter then ignores client-supplied
+forwarding headers and uses one conservative bucket for those requests.
+
+- Keep real `.env` files out of Git; they are already in `.gitignore`.
+- Commit `.env.example` with variable names and safe placeholders only.
 - Rotate credentials if a secret is ever committed or shared accidentally.
-- Use separate credentials and configuration for local development and production.
+- Use separate Nexconn applications and secrets for development and production.
+- Never create a `NEXT_PUBLIC_*` variable for the App Secret, database URL,
+  webhook secret, or session secret.
 
-## Proposed API
+The full credential checklist and Console setup steps are in
+[TEAM_LEAD.md](TEAM_LEAD.md).
 
-These are Vaani Room application routes proposed in the architecture. They are not Nexconn API endpoints. Update them to match the implemented backend.
+## API routes
+
+These are Vaani Room application routes. They are not Nexconn API endpoints.
+
+Implemented in Phase 1:
+
+| Method | Route | Purpose |
+|---|---|---|
+| `POST` | `/api/auth/register` | Create a host account and session |
+| `POST` | `/api/auth/login` | Sign in a host |
+| `POST` | `/api/auth/logout` | Clear the current session |
+| `GET` | `/api/auth/me` | Return the current session user |
+| `POST` | `/api/rooms` | Create a room, provision its channel, return QR + link |
+| `GET` | `/api/rooms` | List the signed-in host's rooms and totals |
+| `GET` | `/api/health` | Service and database health |
+
+Planned next (see the roadmap):
 
 | Method | Route | Purpose |
 |---|---|---|
@@ -280,6 +379,12 @@ The proposed relational model includes these main entities:
 
 See the [Entity Relationship Diagram in the architecture document](docs/architecture.md#7-entity-relationship-diagram) for relationships and proposed fields.
 
+The model is implemented in [`prisma/schema.prisma`](prisma/schema.prisma) with
+the documented uniqueness constraints: one vote per `(question, user)`, unique
+room join codes and channel IDs, idempotent `(room, clientNonce)` question
+submissions, and unique webhook external IDs. See
+[docs/implementation-notes.md](docs/implementation-notes.md) §5 for details.
+
 ## Security, privacy, and reliability
 
 - **Keep the App Secret on the server.** Never put it in frontend code, client-side environment variables, or a public repository.
@@ -299,7 +404,7 @@ These are design requirements to implement and verify, not a claim that all cont
 
 A practical implementation order is:
 
-1. [ ] Create a room and generate a QR join link.
+1. [x] Create a room and generate a QR join link.
 2. [ ] Join the room from a second browser/device.
 3. [ ] Implement backend-issued user tokens and secure Nexconn configuration.
 4. [ ] Send and receive messages in a Nexconn Open Channel.
@@ -316,7 +421,7 @@ A practical implementation order is:
 
 Use this checklist before presenting or submitting the project:
 
-- [ ] A lecturer can create a room.
+- [x] A lecturer can create a room.
 - [ ] A QR code opens the correct room on a phone.
 - [ ] A student can join without installing a dedicated app.
 - [ ] A student can select a preferred language.
@@ -331,6 +436,21 @@ Use this checklist before presenting or submitting the project:
 - [ ] Refreshing or reconnecting restores recent history from the application database.
 - [ ] A closed room rejects new joins and submissions.
 - [ ] No App Secret or database credential is exposed in browser code or Git history.
+
+## Team handoff
+
+The team lead owns the Nexconn account, credentials, Console configuration, and
+deployment. Everything they need is collected in **[TEAM_LEAD.md](TEAM_LEAD.md)**:
+
+- required environment variables and which ones are secret;
+- the exact values, SDK details, token API, webhook contract, translation
+  mapping, and plan limits still needed from Nexconn;
+- Console setup steps;
+- where each integration plugs into the codebase;
+- security and production checklists.
+
+Engineering decisions and the phase log live in
+[docs/implementation-notes.md](docs/implementation-notes.md).
 
 ## Contributing
 

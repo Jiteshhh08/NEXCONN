@@ -1,0 +1,187 @@
+// Vaani Room — application data model.
+// Mirrors the ERD in docs/architecture.md §7. SQLite is used for local
+// development; the schema is intentionally portable to Postgres.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                String   @id @default(cuid())
+  displayName       String?
+  email             String?  @unique
+  passwordHash      String?
+  role              String   @default("student")
+  preferredLanguage String   @default("en")
+  isGuest           Boolean  @default(true)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  hostedRooms     Room[]        @relation("RoomHost")
+  participants    Participant[]
+  questions       Question[]    @relation("QuestionAuthor")
+  votes           Vote[]
+  answers         Answer[]      @relation("AnswerAuthor")
+  sessions        Session[]
+
+  @@index([role])
+}
+
+model Session {
+  id         String   @id @default(cuid())
+  userId     String
+  tokenHash  String   @unique
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  lastSeenAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model Room {
+  id               String    @id @default(cuid())
+  hostUserId       String
+  title            String
+  joinCode         String    @unique
+  nexconnChannelId String?   @unique
+  hostLanguage     String
+  status           String    @default("active")
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  closedAt         DateTime?
+
+  host         User            @relation("RoomHost", fields: [hostUserId], references: [id], onDelete: Cascade)
+  participants Participant[]
+  questions    Question[]
+  groups       QuestionGroup[]
+
+  @@index([hostUserId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model Participant {
+  id       String   @id @default(cuid())
+  roomId   String
+  userId   String
+  joinedAt DateTime @default(now())
+  isActive Boolean  @default(true)
+
+  room Room @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([roomId, userId])
+  @@index([userId])
+}
+
+model Question {
+  id               String   @id @default(cuid())
+  roomId           String
+  askedByUserId    String
+  nexconnMessageId String?  @unique
+  clientNonce      String?
+  originalText     String
+  sourceLanguage   String
+  hostTranslation  String?
+  isAnonymous      Boolean  @default(false)
+  moderationStatus String   @default("pending")
+  upvoteCount      Int      @default(0)
+  groupId          String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  room    Room           @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  askedBy User           @relation("QuestionAuthor", fields: [askedByUserId], references: [id], onDelete: Cascade)
+  group   QuestionGroup? @relation(fields: [groupId], references: [id], onDelete: SetNull)
+  votes   Vote[]
+  answers Answer[]
+
+  // Idempotency for a retried client submission inside one room.
+  @@unique([roomId, clientNonce])
+  @@index([roomId, moderationStatus, createdAt])
+  @@index([roomId, upvoteCount])
+  @@index([askedByUserId])
+}
+
+model Vote {
+  id         String   @id @default(cuid())
+  questionId String
+  userId     String
+  createdAt  DateTime @default(now())
+
+  question Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // The database-level guarantee behind duplicate-vote prevention.
+  @@unique([questionId, userId])
+  @@index([userId])
+}
+
+model Answer {
+  id               String   @id @default(cuid())
+  questionId       String
+  lecturerUserId   String
+  nexconnMessageId String?  @unique
+  answerText       String
+  answerLanguage   String
+  isPinned         Boolean  @default(false)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  question Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  lecturer User     @relation("AnswerAuthor", fields: [lecturerUserId], references: [id], onDelete: Cascade)
+
+  @@index([questionId, createdAt])
+}
+
+model QuestionGroup {
+  id         String   @id @default(cuid())
+  roomId     String
+  groupLabel String
+  createdAt  DateTime @default(now())
+
+  room      Room       @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  questions Question[]
+
+  @@index([roomId])
+}
+
+// Optional application-side cache for async translation results, keyed by
+// message ID and target language (see architecture §7 implementation note).
+model MessageTranslation {
+  id             String   @id @default(cuid())
+  messageId      String
+  targetLanguage String
+  sourceLanguage String
+  sourceText     String
+  translatedText String?
+  status         String   @default("pending")
+  provider       String
+  errorMessage   String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([messageId, targetLanguage])
+  @@index([status])
+}
+
+// Idempotency ledger for webhook deliveries.
+model WebhookEvent {
+  id           String    @id @default(cuid())
+  externalId   String    @unique
+  eventType    String
+  payload      String
+  processedAt  DateTime?
+  errorMessage String?
+  createdAt    DateTime  @default(now())
+
+  @@index([eventType])
+}

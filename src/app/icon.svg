@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Vaani Room">
+  <rect width="64" height="64" rx="18" fill="#0f5c53"/>
+  <path d="M14 20.5A6.5 6.5 0 0 1 20.5 14h23a6.5 6.5 0 0 1 6.5 6.5v16a6.5 6.5 0 0 1-6.5 6.5H29l-10.8 8.3a1.8 1.8 0 0 1-2.9-1.4V42.6A6.5 6.5 0 0 1 14 36.5v-16Z" fill="#f6fffc"/>
+  <path d="M24 24.5v7.2M32 21.5v13.2M40 24.5v7.2" stroke="#0f5c53" stroke-width="3.4" stroke-linecap="round"/>
+</svg>
