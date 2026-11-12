@@ -24,6 +24,8 @@ import { getSessionUser } from "@/server/auth/session";
 import { getRoomForHost } from "@/server/rooms/service";
 import { buildRoomShare } from "@/server/rooms/share";
 
+import { HostRoomClient } from "./host-room-client";
+
 export const metadata: Metadata = {
   title: "Room",
   description: "Share the room QR code and monitor its activity.",
@@ -195,6 +197,16 @@ export default async function HostRoomPage({
             </Card>
           </div>
         </div>
+
+        <h2 className="mt-10 font-display text-2xl font-semibold tracking-[-0.03em]">
+          Live console
+        </h2>
+        <HostRoomClient
+          roomId={room.id}
+          joinCode={room.joinCode}
+          hostLanguage={room.hostLanguage}
+          initialStatus={room.status}
+        />
       </div>
     </section>
   );

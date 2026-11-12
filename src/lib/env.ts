@@ -2,6 +2,8 @@ import "server-only";
 
 import { z } from "zod";
 
+import { TRANSLATION_PROVIDER_NAMES } from "@/lib/translation/contracts";
+
 const booleanFlag = z.preprocess((value) => {
   if (typeof value !== "string") return value;
   return ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
@@ -48,15 +50,23 @@ const envSchema = z.object({
   NEXCONN_APP_KEY: optionalString,
   NEXCONN_APP_SECRET: optionalString,
   NEXCONN_API_BASE_URL: optionalUrl,
+  // Not part of the Nexconn contract: webhooks are verified with the App
+  // Secret. Verified unused (the webhook receiver reads NEXCONN_APP_SECRET),
+  // and kept only so existing `.env` files stay valid.
   NEXCONN_WEBHOOK_SECRET: optionalString,
   NEXCONN_CHAT_PROVIDER: z.enum(["local", "nexconn"]).default("local"),
 
   TRANSLATION_PROVIDER: z
-    .enum(["passthrough", "nexconn", "libretranslate"])
+    .enum(TRANSLATION_PROVIDER_NAMES)
     .default("passthrough"),
   LIBRETRANSLATE_URL: optionalUrl,
   LIBRETRANSLATE_API_KEY: optionalString,
+  // Optional contact address for the MyMemory provider; raises its quota.
+  MYMEMORY_EMAIL: optionalString,
 
+  // Declared but never read: the translate route is always available and the
+  // provider selection decides the behaviour. Kept only so existing `.env`
+  // files stay valid.
   TRANSLATION_ENABLED: booleanFlag.default(false),
 });
 

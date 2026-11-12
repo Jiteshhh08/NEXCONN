@@ -9,7 +9,7 @@
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test src/server/auth/client-ip.test.ts",
+    "test": "tsx --test src/lib/validation.test.ts src/lib/chat/events.test.ts src/lib/api/client.test.ts src/lib/translation/mymemory.test.ts src/server/auth/client-ip.test.ts src/server/nexconn/signing.test.ts src/server/webhooks/signature.test.ts",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:push": "prisma db push",
@@ -17,6 +17,8 @@
     "db:reset": "prisma migrate reset"
   },
   "dependencies": {
+    "@nexconn/chat": "^26.2.1",
+    "@nexconn/engine": "^26.2.1",
     "@prisma/client": "6.19.3",
     "clsx": "^2.1.1",
     "lucide-react": "^1.72.0",

@@ -3,7 +3,6 @@ import {
   CalendarClock,
   Languages,
   MessageSquareText,
-  ScanLine,
   ShieldCheck,
   Users,
 } from "lucide-react";
@@ -14,10 +13,12 @@ import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { getLanguage, LANGUAGES } from "@/lib/domain";
+import { getLanguage } from "@/lib/domain";
 import { formatDate } from "@/lib/format";
 import { joinCodeSchema } from "@/lib/validation";
 import { getPublicRoomByCode } from "@/server/rooms/service";
+
+import { JoinRoomClient } from "./join-room-client";
 
 export const metadata: Metadata = {
   title: "Room",
@@ -101,43 +102,11 @@ export default async function JoinRoomPage({
             </Link>
           </Card>
         ) : (
-          <div className="mt-8 grid gap-6 lg:grid-cols-[1.05fr_0.95fr]">
-            <Card className="p-6 sm:p-8">
-              <span className="inline-flex items-center gap-1.5 rounded-full bg-primary/8 px-3 py-1 text-xs font-semibold text-primary">
-                <ScanLine aria-hidden="true" className="size-3.5" />
-                Room found
-              </span>
-              <h2 className="mt-4 font-display text-2xl font-semibold tracking-[-0.025em]">
-                You are in the right place.
-              </h2>
-              <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                This room is open and ready for questions. Your host will see
-                them in {hostLanguage.label}.
-              </p>
-
-              <div className="mt-6">
-                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">
-                  Ask in a language you think in
-                </p>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {LANGUAGES.map((language) => (
-                    <span
-                      key={language.code}
-                      lang={language.code}
-                      className="rounded-full border border-border bg-background/70 px-3 py-1.5 text-xs font-medium"
-                    >
-                      {language.nativeLabel}
-                    </span>
-                  ))}
-                </div>
-              </div>
-
-              <Alert tone="info" className="mt-6" title="Join setup comes next">
-                Choosing your name and preferred language, then entering the live
-                question board, is the next implementation step. The room code and
-                QR destination already resolve correctly.
-              </Alert>
-            </Card>
+          <div className="mt-8 grid gap-6 lg:grid-cols-[1.05fr_0.95fr] lg:items-start">
+            <JoinRoomClient
+              joinCode={room.joinCode}
+              hostLanguage={room.hostLanguage}
+            />
 
             <Card className="p-6 sm:p-8">
               <h2 className="text-sm font-semibold">How the room works</h2>

@@ -7,7 +7,9 @@ import { prisma } from "@/lib/db";
 import type { RoomStatus } from "@/lib/domain";
 import type { CreateRoomInput } from "@/lib/validation";
 import { getChatProvider } from "@/server/chat";
+import { publishRoomEvent } from "@/server/chat/live";
 
+import type { RoomAccessSnapshot } from "./access";
 import { generateJoinCode } from "./join-code";
 
 const roomSelection = {
@@ -198,4 +200,36 @@ export async function getHostOverview(hostUserId: string): Promise<{
   ]);
 
   return { activeRooms, totalQuestions, totalParticipants };
+}
+
+/**
+ * Closes a room. The database is updated first so join, question, vote and
+ * answer routes immediately reject the room; the live channel is then told and
+ * destroyed best-effort. Closing an already-closed room is a no-op success.
+ */
+export async function closeRoomForHost(
+  room: RoomAccessSnapshot,
+): Promise<void> {
+  if (room.status === "closed") return;
+
+  const closed = await prisma.room.updateMany({
+    where: { id: room.id, status: "active" },
+    data: { status: "closed", closedAt: new Date() },
+  });
+  if (closed.count !== 1) return;
+
+  await publishRoomEvent(room.nexconnChannelId, room.id, "room.closed", {
+    roomId: room.id,
+  });
+
+  if (room.nexconnChannelId) {
+    try {
+      await getChatProvider().closeChannel(room.nexconnChannelId);
+    } catch (error) {
+      console.error(
+        "[chat] Failed to destroy the room channel:",
+        error instanceof Error ? error.message : error,
+      );
+    }
+  }
 }

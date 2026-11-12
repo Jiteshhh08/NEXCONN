@@ -20,11 +20,22 @@ export interface ApiFailure {
   };
 }
 
+/**
+ * Every API response is uncacheable. The room board polls these endpoints for
+ * newly published answers, questions and votes, and a cached (or proxy-cached)
+ * body would keep the answer hidden until a full page reload.
+ */
+function withNoStore(init?: ResponseInit): ResponseInit {
+  const headers = new Headers(init?.headers);
+  headers.set("Cache-Control", "no-store");
+  return { ...init, headers };
+}
+
 export function apiSuccess<T>(
   data: T,
   init?: ResponseInit,
 ): NextResponse<ApiSuccess<T>> {
-  return NextResponse.json({ ok: true, data }, init);
+  return NextResponse.json({ ok: true, data }, withNoStore(init));
 }
 
 export function apiFailure(
@@ -38,7 +49,7 @@ export function apiFailure(
       ok: false,
       error: details === undefined ? { code, message } : { code, message, details },
     },
-    { status },
+    withNoStore({ status }),
   );
 }
 
