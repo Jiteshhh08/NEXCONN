@@ -48,6 +48,18 @@ export interface RoomAccessSnapshot {
   nexconnChannelId: string | null;
 }
 
+export async function assertOpenRoomForWrite(
+  tx: Prisma.TransactionClient,
+  roomId: string,
+): Promise<void> {
+  const claimed = await tx.room.updateMany({
+    where: { id: roomId, status: "active" },
+    data: { updatedAt: new Date() },
+  });
+
+  if (claimed.count !== 1) throw roomClosed();
+}
+
 function toSnapshot(room: RoomRow): RoomAccessSnapshot {
   return {
     id: room.id,
@@ -106,15 +118,17 @@ export async function loadQuestionContext(
 export async function assertRoomParticipant(
   roomId: string,
   userId: string,
-): Promise<void> {
+): Promise<{ preferredLanguage: string; isAnonymous: boolean }> {
   const participant = await prisma.participant.findUnique({
     where: { roomId_userId: { roomId, userId } },
-    select: { id: true },
+    select: { preferredLanguage: true, isAnonymous: true },
   });
 
   if (!participant) {
     throw forbidden("Join this room before taking part.");
   }
+
+  return participant;
 }
 
 /** Requires a signed-in participant of the room. */

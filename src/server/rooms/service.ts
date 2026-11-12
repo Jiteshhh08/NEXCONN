@@ -212,10 +212,11 @@ export async function closeRoomForHost(
 ): Promise<void> {
   if (room.status === "closed") return;
 
-  await prisma.room.update({
-    where: { id: room.id },
+  const closed = await prisma.room.updateMany({
+    where: { id: room.id, status: "active" },
     data: { status: "closed", closedAt: new Date() },
   });
+  if (closed.count !== 1) return;
 
   await publishRoomEvent(room.nexconnChannelId, room.id, "room.closed", {
     roomId: room.id,

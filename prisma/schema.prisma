@@ -69,11 +69,13 @@ model Room {
 }
 
 model Participant {
-  id       String   @id @default(cuid())
-  roomId   String
-  userId   String
-  joinedAt DateTime @default(now())
-  isActive Boolean  @default(true)
+  id                String   @id @default(cuid())
+  roomId            String
+  userId            String
+  joinedAt          DateTime @default(now())
+  isActive          Boolean  @default(true)
+  preferredLanguage String   @default("en")
+  isAnonymous       Boolean  @default(false)
 
   room Room @relation(fields: [roomId], references: [id], onDelete: Cascade)
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)

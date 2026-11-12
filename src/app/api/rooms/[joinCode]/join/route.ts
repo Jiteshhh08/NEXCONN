@@ -10,6 +10,7 @@ import {
   setSessionCookie,
 } from "@/server/auth/session";
 import { buildJoinedRoom } from "@/server/rooms/joined";
+import { assertOpenRoomForWrite } from "@/server/rooms/access";
 import { getPublicRoomByCode } from "@/server/rooms/service";
 
 export const runtime = "nodejs";
@@ -84,10 +85,22 @@ export async function POST(
       createdGuestSession = true;
     }
 
-    await prisma.participant.upsert({
-      where: { roomId_userId: { roomId: room.id, userId } },
-      create: { roomId: room.id, userId },
-      update: { isActive: true },
+    await prisma.$transaction(async (tx) => {
+      await assertOpenRoomForWrite(tx, room.id);
+      await tx.participant.upsert({
+        where: { roomId_userId: { roomId: room.id, userId } },
+        create: {
+          roomId: room.id,
+          userId,
+          preferredLanguage: input.preferredLanguage,
+          isAnonymous: input.isAnonymous,
+        },
+        update: {
+          isActive: true,
+          preferredLanguage: input.preferredLanguage,
+          isAnonymous: input.isAnonymous,
+        },
+      });
     });
 
     const joined = await buildJoinedRoom({
