@@ -1,11 +1,21 @@
 # Vaani Room — Team Lead Handoff & Nexconn Integration Guide
 
-> **Status:** Phase 0 (foundation) complete. This document is the single
-> checklist for the team lead to connect the real Nexconn application and take
-> the project to production. Update it as each integration is completed.
+> **Status:** Nexconn integration wiring complete; **not yet exercised against a
+> live Nexconn application**. The team has no Console access, so nothing is
+> `LIVE-TESTED`. This document is the single checklist for the team lead to
+> connect the real Nexconn application and take the project to production.
+> Update it as each integration is verified.
 >
-> **Read this with:** [`README.md`](./README.md) and
-> [`docs/architecture.md`](./docs/architecture.md).
+> **Read this with:** [`README.md`](./README.md),
+> [`docs/architecture.md`](./docs/architecture.md) (proposed design),
+> [`docs/implementation-notes.md`](./docs/implementation-notes.md) (what is
+> actually built) and
+> [`docs/nexconn-integration-contract.md`](./docs/nexconn-integration-contract.md)
+> (verified Nexconn contracts, with source links and status labels).
+>
+> **Status label vocabulary** used in the contract document: `VERIFIED`,
+> `IMPLEMENTED`, `LIVE-TESTED`, `NEEDS-CONSOLE-CONFIRMATION`, `BLOCKED`,
+> `UNVERIFIED`.
 
 ---
 
@@ -19,13 +29,16 @@
 | Environment validation (Zod) and `.env.example` | ✅ Complete |
 | Shared API envelope, error codes, request validators | ✅ Complete |
 | Chat/translation provider contracts | ✅ Complete |
-| Local dev chat provider + honest passthrough translation | ✅ Complete |
+| Local dev chat provider + honest passthrough translation | ✅ Complete (preserved fallback) |
 | Responsive marketing shell (`/`, `/host`, `/join`) | ✅ Complete |
 | `GET /api/health` with database check | ✅ Complete |
-| Real Nexconn chat/token/webhook/translation wiring | ⏳ Pending — needs the values in §4 |
-| Host auth (email/password, DB sessions) | ✅ Complete |
-| Room creation, QR code, join-code lookup | ✅ Complete |
-| Student identity, live questions, votes, answers | ⏳ Phases 2–8 |
+| Nexconn signed server HTTP client (failover, timeouts) | ✅ Built — not live-tested |
+| Nexconn server chat adapter (create/issue/publish/close) | ✅ Built — not live-tested |
+| Nexconn browser transport (`ChatClientTransport`) | ✅ Built — not live-tested, not yet mounted in a page |
+| Session/token issuance route (`POST /api/rooms/[joinCode]/join`) | ✅ Built — not live-tested |
+| Nexconn webhook receiver (verify → dedupe → ledger) | ✅ Built — not live-tested |
+| Nexconn built-in translation adapter | ⏳ Stubbed (`unavailable`) — needs Console confirmation (§4.5) |
+| Live student/host room UI (questions, votes, answers) | ⏳ Phases 2–8 |
 | Test suite and production hardening | ⏳ Phase 9 |
 
 The application is deliberately runnable **without** Nexconn credentials:
@@ -69,10 +82,9 @@ Copy `.env.example` to `.env`. **Never commit `.env`.**
 | `SESSION_SECRET` | Server | Session cookies and local transport tokens | **Yes** |
 | `TRUSTED_PROXY_HEADER` | Server | Client-IP header written by the deployment proxy | No |
 | `TRUSTED_PROXY_HOPS` | Server | Number of trusted proxies in front of the app | No |
-| `NEXCONN_APP_KEY` | Server now; safe public config later | Browser SDK initialization | No |
-| `NEXCONN_APP_SECRET` | **Server only** | Privileged Nexconn API calls | **YES — never expose** |
+| `NEXCONN_APP_KEY` | Server now; safe public config later | Browser SDK initialization and token issuance | No |
+| `NEXCONN_APP_SECRET` | **Server only** | Privileged Nexconn API calls **and webhook signature verification** | **YES — never expose** |
 | `NEXCONN_API_BASE_URL` | Server | Nexconn server API base URL / region | No |
-| `NEXCONN_WEBHOOK_SECRET` | Server | Webhook signature verification | **Yes** |
 | `NEXCONN_CHAT_PROVIDER` | Server | `local` (dev) or `nexconn` | No |
 | `TRANSLATION_PROVIDER` | Server | `passthrough`, `nexconn`, or `libretranslate` | No |
 | `LIBRETRANSLATE_URL` | Server | Optional local/demo translation | No |
@@ -82,6 +94,11 @@ Rules:
 
 - Never create a `NEXT_PUBLIC_*` variable for the App Secret, database URL,
   webhook secret, or session secret.
+- Nexconn webhooks are signed with the **same App Secret** (`sha1(AppSecret +
+  Nonce + Timestamp)`); there is no separate webhook secret.
+  `NEXCONN_WEBHOOK_SECRET` is **not** part of the Nexconn contract — it is left
+  blank in `.env.example` only for deployments that may add one later, and the
+  webhook receiver does not read it.
 - If a secret is ever pasted into chat, committed, or shared, rotate it in the
   Nexconn Console immediately.
 - Use separate Nexconn applications/credentials for development and production.
@@ -97,44 +114,64 @@ Rules:
 
 ## 4. Values and documentation needed from the team lead
 
-Please provide the following. Put the two secrets directly into the local
-`.env` (or the deployment secret manager) — do not send them in a group chat.
+The integration is written against the public Nexconn documentation (see
+[`docs/nexconn-integration-contract.md`](./docs/nexconn-integration-contract.md)
+for the exact source links). Everything below is still required to go live;
+item-by-item confirmations are also listed as open items in §7 of that
+contract document. Put secrets directly into the local `.env` (or the
+deployment secret manager) — do not send them in a group chat.
 
 ### 4.1 Nexconn application
 
 - [ ] `NEXCONN_APP_KEY`
 - [ ] `NEXCONN_APP_SECRET` (via secret manager only)
-- [ ] `NEXCONN_API_BASE_URL` (exact base URL for the account's region)
+- [ ] `NEXCONN_API_BASE_URL` (exact base URL for the account's region — the
+      Asia/Beijing host is **unconfirmed**; only the Singapore/global host
+      pattern is documented)
 - [ ] Nexconn plan name and environment (sandbox/staging/production)
 
 ### 4.2 Chat SDK
 
-- [ ] Browser SDK package name and version (npm package or CDN URL)
-- [ ] Exact browser initialization snippet
-- [ ] Open Channel creation call (endpoint, request body, response shape)
-- [ ] Open Channel join/subscribe call
-- [ ] Message send call and message ID field
-- [ ] Server-side message publish call (needed for vote-count updates)
-- [ ] Channel close/delete call
-- [ ] Any required channel naming rules or length limits
+Already installed and verified against the shipped type declarations:
+`@nexconn/chat@26.2.1` with peer `@nexconn/engine@26.2.1` (global
+`NexconnChat`). The server and browser adapters are written against these
+symbols. Still to confirm with a live account:
+
+- [ ] The Open Channel id rules the adapter assumes: `channelId = roomId`
+      (allowed characters and length are **unverified**)
+- [ ] Which `fromUserId` the server may use when publishing room events
+      (currently a placeholder `vaaniSystem`, flagged `UNVERIFIED`)
+- [ ] Timestamp validity window for signed requests
+- [ ] Whether published text messages can carry the metadata the browser
+      transport attaches
+- [ ] Channel close/delete behaviour and any retention implications
 
 ### 4.3 User access tokens
 
-- [ ] Server endpoint that issues a user access token
-- [ ] Required auth headers for that endpoint
-- [ ] Token TTL and refresh behavior
+Implemented against the documented `POST /v4/auth/access-token/issue` endpoint
+(`{ userId, name }` → `{ userId, accessToken }`) and returned by
+`POST /api/rooms/[joinCode]/join`. Still to confirm:
+
+- [ ] Real token TTL (the adapter currently uses a 24-hour refresh hint only;
+      the expiry is **not** returned by the documented response)
 - [ ] Required `userId` format (length, allowed characters, uniqueness scope)
-- [ ] Example response containing token, expiry, and any session fields
+- [ ] Whether a per-user channel membership or join is required before the
+      browser may enter the channel
 
 ### 4.4 Webhooks
 
+The receiver is implemented at `${APP_BASE_URL}/api/webhooks/nexconn`. It
+verifies `sha1(AppSecret + Nonce + Timestamp)` from the `AppKey`, `Nonce`,
+`Timestamp`, `Signature` headers **before** parsing the body, then dedupes on
+the Nexconn event id. Still to confirm:
+
 - [ ] Confirmation that webhooks can be configured for the account
-- [ ] Public callback URL: `${APP_BASE_URL}/api/webhooks/nexconn`
-- [ ] Event types to subscribe to (message received, translation result, etc.)
-- [ ] Signature header name and algorithm (e.g. HMAC-SHA256)
-- [ ] Raw-body requirements for verification
-- [ ] Retry policy and duplicate-delivery behavior
-- [ ] One real example payload per event type (redact secrets)
+- [ ] The exact event types to enable and one real payload per event type
+      (redact secrets) — the receiver currently accepts any event and stores it
+      in the ledger
+- [ ] Retry policy and duplicate-delivery behaviour
+- [ ] Whether the signature uses hex or base64 (the code assumes **hex**)
+- [ ] Whether request bodies are gzipped
 
 ### 4.5 Translation
 
@@ -176,7 +213,8 @@ Verify each step against the Console version the team actually has.
 4. **Configure webhooks.**
    - URL: `${APP_BASE_URL}/api/webhooks/nexconn`
    - Events: message events and translation result events
-   - Copy the signing secret into `NEXCONN_WEBHOOK_SECRET`
+   - No separate signing secret: webhooks are signed with the application's
+     App Secret, so only `NEXCONN_APP_KEY` / `NEXCONN_APP_SECRET` are needed
    - Keep the raw body available for signature verification
 5. **Record plan limits.**
    Fill in §4.6 so load tests are realistic.
@@ -188,18 +226,28 @@ Verify each step against the Console version the team actually has.
 
 ## 6. Where the integration plugs in
 
-| Seam | File | Current state | Work required |
-|---|---|---|---|
-| Server chat adapter | `src/server/chat/nexconn.ts` | Explicit "not configured" stub | Implement create channel, issue token, publish event, close channel |
-| Chat provider selector | `src/server/chat/index.ts` | Working (`local`/`nexconn`) | None |
-| Browser chat transport | `src/client/chat/nexconn.ts` (Phase 3) | Not created | Wrap the Nexconn browser SDK behind `ChatClientTransport` |
-| Translation adapter | `src/server/translation/nexconn.ts` | Honest `unavailable` result | Implement async task/result handling |
-| Translation selector | `src/server/translation/index.ts` | Working | None |
-| Webhook receiver | `src/app/api/webhooks/nexconn/route.ts` (Phase 4) | Not created | Verify signature, dedupe by external ID, archive events |
-| Token/config API | `src/app/api/rooms/[joinCode]/join/route.ts` (Phase 2) | Not created | Return App Key + short-lived user token, never the App Secret |
+| Seam | File | Current state |
+|---|---|---|
+| Server signed HTTP client | `src/server/nexconn/client.ts` | Built — signing, timeouts, primary/backup host failover, JSON unwrap |
+| Request signing | `src/server/nexconn/signing.ts` | Built — `sha1(AppSecret + Nonce + Timestamp)` hex |
+| Server chat adapter | `src/server/chat/nexconn.ts` | Built — create channel, issue token, publish event, close channel |
+| Chat provider selector | `src/server/chat/index.ts` | Working (`local`/`nexconn`) |
+| Browser chat transport | `src/client/chat/nexconn.ts` | Built (not mounted in a page yet) — wraps `@nexconn/chat` behind `ChatClientTransport` |
+| Live-event wire format | `src/lib/chat/events.ts` | Built — structured events encoded into text messages |
+| Translation adapter | `src/server/translation/nexconn.ts` | Honest `unavailable` result — waiting on Console confirmation (§4.5) |
+| Translation selector | `src/server/translation/index.ts` | Working |
+| Webhook receiver | `src/app/api/webhooks/nexconn/route.ts` | Built — verify signature → dedupe by external id → ledger |
+| Webhook signature | `src/server/webhooks/signature.ts` | Built — reads `AppKey`/`Nonce`/`Timestamp`/`Signature` |
+| Token/config API | `src/app/api/rooms/[joinCode]/join/route.ts` | Built — returns App Key + user token, never the App Secret |
 
 The server adapters are protected with `import "server-only"` so they cannot be
-accidentally bundled into browser code.
+accidentally bundled into browser code. Two Node-level helpers
+(`src/server/nexconn/signing.ts`, `src/server/webhooks/signature.ts`)
+deliberately omit that guard so unit tests can import them; both take the
+secret as an argument and never read the environment.
+
+The `local` chat provider and `passthrough` translation remain the default
+fallbacks and are kept intact.
 
 ### Intended message flow
 
@@ -318,6 +366,12 @@ Health check: `http://localhost:3000/api/health` should return
   deployment.
 - The local SSE transport is a development convenience. It must not be
   presented as the production real-time layer.
+- The Nexconn chat wiring (server adapter, browser transport, join route,
+  webhook receiver) is built but **not live-tested** — the team has no Console
+  access. See the open items listed in §4 and in
+  `docs/nexconn-integration-contract.md`.
+- The browser transport is not yet mounted in a student/host room page; the
+  live room UI is part of Phases 2–8.
 - Translation quality and language coverage are unverified until the team lead
   enables Nexconn translation and supplies the language mapping.
 

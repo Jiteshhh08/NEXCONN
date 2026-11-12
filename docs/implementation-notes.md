@@ -1,366 +1,199 @@
-# Implementation Notes
+# Vaani Room — Implementation Notes
 
-This document records how the implemented system actually works. It is the
-engineering companion to [`README.md`](../README.md) (product requirements) and
-[`docs/architecture.md`](./architecture.md) (design authority).
-
-> **Phase 0 status:** foundation only. Feature routes listed as "planned" below
-> are not implemented yet.
-
----
-
-## 1. Stack decisions
-
-| Area | Choice | Version | Notes |
-|---|---|---|---|
-| Framework | Next.js App Router | 16.4.6 | Turbopack dev/build |
-| UI | React | 19.3.1 | Server Components by default |
-| Language | TypeScript | 5.9.3 | `strict`, `noUncheckedIndexedAccess` |
-| Styling | Tailwind CSS | 4.3.5 | CSS-first `@theme` tokens, no `tailwind.config` |
-| ORM | Prisma | 6.19.3 | SQLite locally; Postgres for production |
-| Validation | Zod | 4.6.7 | Shared request schemas |
-| Icons | lucide-react | 1.72.0 | |
-| QR (planned) | qrcode | 1.5.4 | Server-side generation in Phase 1 |
-
-### Why Next.js 16 rather than 15
-
-Next.js 15 bundles a PostCSS version affected by published advisories. Since
-security is an explicit project requirement, the app was upgraded to the current
-stable Next 16. That brought two consequences:
-
-- **Zod 4 instead of Zod 3.** `required_error` is gone; use `.min()` messages, and
-  `error.issues` replaces `flatten()` in the API layer.
-- **Next 16 conventions.** Async `cookies()`, async route `params`,
-  `proxy.ts` instead of `middleware.ts`, and flat ESLint config built from
-  `eslint-config-next/core-web-vitals` + `/typescript`.
-
-### Why Prisma 6 rather than 7
-
-Prisma 7 is a breaking major. Staying on 6.19.3 keeps the documented model
-working today. `npm audit` reports advisories in `deepmerge-ts`, which is pulled
-in by Prisma's **CLI dev tooling**, not the runtime client. Tracked in
-`TEAM_LEAD.md` §8.
-
-### Why SQLite locally
-
-There is no Docker/Postgres daemon on the development machine. The schema is
-written to be portable: no SQLite-only types, string enums stored as `String`
-plus TypeScript union types, and explicit composite indexes. A Postgres baseline
-migration is required before deployment.
+> **Document status:** Living implementation log (v0.1)
+> **Companion documents:**
+> [`docs/architecture.md`](./architecture.md) (proposed design),
+> [`docs/nexconn-integration-contract.md`](./nexconn-integration-contract.md)
+> (verified Nexconn contracts), [`TEAM_LEAD.md`](../TEAM_LEAD.md) (handoff).
+>
+> This file records **what is actually built**, where it lives, and which parts
+> are still scaffolding. It does not restate the architecture diagrams; update
+> those in `architecture.md` instead.
 
 ---
 
-## 2. Directory map
+## 1. How to read the status labels
 
-```text
-src/
-├── app/
-│   ├── layout.tsx              Root layout, metadata, skip link, chrome
-│   ├── page.tsx                Landing page
-│   ├── host/
-│   │   ├── page.tsx            Protected dashboard + room list
-│   │   ├── login/page.tsx      Host sign in
-│   │   ├── register/page.tsx   Host sign up
-│   │   └── rooms/[joinCode]/   Room QR + share view
-│   ├── join/
-│   │   ├── page.tsx            Code entry
-│   │   └── [code]/page.tsx     Public room confirmation
-│   ├── error.tsx               Route error boundary
-│   ├── not-found.tsx           404
-│   ├── manifest.ts             PWA manifest
-│   ├── icon.svg                App icon
-│   ├── globals.css             Tailwind theme tokens, base, utilities
-│   └── api/
-│       ├── auth/{register,login,logout,me}/route.ts
-│       ├── rooms/route.ts      Create + list host rooms
-│       └── health/route.ts     GET health + DB connectivity
-├── components/
-│   ├── auth/host-auth-form.tsx
-│   ├── host/                   Create room, copy link, sign out
-│   ├── join/join-code-form.tsx
-│   ├── brand/logo.tsx
-│   ├── marketing/hero-preview.tsx
-│   ├── site-header.tsx
-│   ├── site-footer.tsx
-│   └── ui/                     button, card, input, badge, alert
-├── lib/
-│   ├── api/errors.ts           AppError taxonomy and helpers
-│   ├── api/request.ts          Origin check
-│   ├── api/response.ts         Success/error envelope + parseJson
-│   ├── chat/contracts.ts       Chat provider/client interfaces
-│   ├── translation/contracts.ts Translation provider interfaces
-│   ├── domain.ts               Roles, statuses, 12 languages
-│   ├── env.ts                  Zod env validation + runtime guards
-│   ├── validation.ts           Request schemas
-│   ├── format.ts               Date formatting
-│   ├── db.ts                   Prisma singleton
-│   └── utils.ts                cn()
-├── instrumentation.ts          Runtime startup checks (secrets)
-└── server/
-    ├── auth/
-    │   ├── password.ts         scrypt hash + verify
-    │   ├── session.ts          Cookie, session lookup, requireHost
-    │   └── rate-limit.ts       In-process fixed window
-    ├── rooms/
-    │   ├── service.ts          Create/list/lookup + channel provisioning
-    │   ├── join-code.ts        Unambiguous 7-character codes
-    │   └── share.ts            Join URL + QR data URL
-    ├── chat/
-    │   ├── index.ts            Provider selector
-    │   ├── local.ts            Signed local dev tokens
-    │   └── nexconn.ts          Integration stub
-    └── translation/
-        ├── index.ts            Provider selector
-        ├── passthrough.ts      Honest fallback
-        ├── nexconn.ts          Integration stub
-        └── libretranslate.ts   Optional local provider
-```
+| Label | Meaning |
+|---|---|
+| **Built** | Implemented, typechecked, linted, tested, and building. |
+| **Dev-only** | Working, but a development convenience — not the production path. |
+| **Stubbed** | Deliberately honest about not being connected; returns an explicit "not available" result. |
+| **Not built** | Planned but absent. |
+
+Nothing in this project has been exercised against a live Nexconn application
+yet. The team has no Console access, so **no feature is live-tested**.
 
 ---
 
-## 3. Conventions
+## 2. Implemented surface
 
-### API envelope
-
-Every JSON endpoint returns one of:
-
-```json
-{ "ok": true, "data": { } }
-```
-
-```json
-{
-  "ok": false,
-  "error": {
-    "code": "VALIDATION_ERROR",
-    "message": "Please check the submitted fields.",
-    "details": { "fieldErrors": [{ "field": "title", "message": "…" }] }
-  }
-}
-```
-
-- `src/lib/api/response.ts` owns `apiSuccess`, `apiFailure`, `apiError`,
-  `parseJson`.
-- `apiError` maps `AppError` → its status, `ZodError` → 422 with field errors,
-  Prisma `P2002` → 409, `P2025` → 404, everything else → 500 with a generic
-  message. Unknown errors are logged, never leaked.
-- Validation details use `error.issues`, not the Zod 3 `flatten()` shape.
-
-### Error codes
-
-`INVALID_JSON`, `VALIDATION_ERROR`, `UNAUTHORIZED`, `FORBIDDEN`, `NOT_FOUND`,
-`CONFLICT`, `ROOM_CLOSED`, `DUPLICATE_VOTE`, `RATE_LIMITED`,
-`TRANSLATION_UNAVAILABLE`, `INTEGRATION_NOT_CONFIGURED`, `INTERNAL_ERROR`.
-
-### Domain values
-
-- Roles: `host`, `student`.
-- Room status: `active`, `closed`.
-- Moderation: `pending`, `approved`, `hidden`, `rejected` (host actions exclude
-  `pending`).
-- Translation: `pending`, `ready`, `failed`, `unavailable`.
-- Languages (12): `en hi mr gu ta te bn kn ml pa or ur`; Urdu is marked RTL.
-- Persisted as strings + TypeScript unions so the schema stays Postgres-portable.
-
-### Secrets
-
-- `src/lib/env.ts` imports `server-only`.
-- Production requires `SESSION_SECRET` ≥ 32 chars.
-- `NEXCONN_CHAT_PROVIDER=nexconn` requires App Key + Secret or startup fails.
-- Nothing privileged uses a `NEXT_PUBLIC_*` variable.
-
----
-
-## 4. Real-time and translation seams
-
-```text
-Question flow
-browser ──ChatClientTransport──▶ Nexconn Open Channel ──▶ other browsers
-   │                                   │
-   │                                   └── webhook ──▶ app DB (Phase 4)
-   └── REST ──▶ Vaani Room API ──▶ Prisma
-```
-
-- `ServerChatProvider` (`src/lib/chat/contracts.ts`): `createChannel`,
-  `issueUserToken`, `publishEvent`, `closeChannel`.
-- `ChatClientTransport`: `connect`, `joinChannel`, `sendQuestion`, `onEvent`,
-  `disconnect`. Phase 3 adds the local SSE implementation and the Nexconn SDK
-  implementation.
-- `TranslationProvider`: one async `translate()` returning
-  `{ translatedText, status, provider, errorMessage }`.
-- The **passthrough** provider never invents text: same language → `ready`, any
-  other pair → `unavailable` with a reason. The UI must keep the original
-  visible.
-- The **local** chat provider signs a short-lived HMAC token with
-  `SESSION_SECRET`; it is a development transport only and must be labelled as
-  such in the UI.
-
-Provider selection is centralized in `src/server/chat/index.ts` and
-`src/server/translation/index.ts`. Domain code depends on the interface, never
-on a concrete provider.
-
----
-
-## 5. Authentication and rooms
-
-### Host authentication
-
-- Email + password, chosen because it has no external dependency and is enough
-  for a demo. Students never register.
-- Passwords use Node `scrypt` with a 16-byte random salt and a 64-byte derived
-  key. Stored as `scrypt$<salt>$<hash>`.
-- Sessions are database-backed: a 32-byte random token is sent in an
-  `HttpOnly`, `SameSite=Lax`, `Secure`-in-production cookie, and only its
-  SHA-256 hash is stored in `SESSION`.
-- Session lifetime is 7 days. Expired rows are deleted on lookup.
-- Registration and login are rate-limited per client key (5 per 15 minutes and
-  10 per 15 minutes respectively). The limiter is in-process, sweeps expired
-  buckets, and caps storage at 10,000 keys so a flood of distinct keys cannot
-  grow memory without bound. It should still be replaced with a shared store
-  for multi-instance deployments.
-- Client IPs are only read from `TRUSTED_PROXY_HEADER` when that variable names
-  a header the deployment proxy overwrites. For a comma-separated chain,
-  `TRUSTED_PROXY_HOPS` selects the client at `parts.length - hops - 1`; a
-  single bare IP is accepted as the client. With the default `none`, forwarding
-  headers are ignored and requests share one conservative bucket.
-- State-changing API routes check `Origin` when the browser sends it.
-
-Routes: `POST /api/auth/register`, `POST /api/auth/login`,
-`POST /api/auth/logout`, `GET /api/auth/me`.
-
-### Rooms
-
-- Join codes are 7 characters from `ABCDEFGHJKMNPQRSTUVWXYZ23456789` (no
-  ambiguous `I`, `L`, `O`, `0`, `1`). Collisions retry up to eight times
-  against the unique database constraint.
-- Creating a room also provisions its chat channel through the configured
-  `ServerChatProvider`. If channel creation fails, the room row is removed so
-  the database never holds a room without a channel.
-- The QR data URL is generated server-side with `qrcode` from
-  `APP_BASE_URL + /join/<code>`, so the printed code always points at the
-  configured deployment.
-- The host dashboard and room detail page are server components that call
-  `getSessionUser()` and redirect unauthenticated visitors to
-  `/host/login`. Room detail also checks ownership; another host's room returns
-  404.
-- `/join/[code]` is public and only exposes the room title, host display name,
-  host language, status, dates, and participant count. It never exposes host
-  email or channel credentials.
-
-Routes: `GET/POST /api/rooms`.
-
-### Deliberate Phase 1 boundary
-
-`/join/[code]` confirms the room exists and is open, but the name/language
-identity step and live question board arrive in Phase 2–3. The page says so
-instead of pretending the join is complete.
-
----
-
-## 6. Data model notes
-
-Mirrors `docs/architecture.md` §7 with these deliberate details:
-
-- `Vote` has `@@unique([questionId, userId])` — the database-level duplicate-vote
-  guarantee.
-- `Room.joinCode` and `Room.nexconnChannelId` are unique.
-- `Question` has `@@unique([roomId, clientNonce])` for idempotent retries, plus
-  `nexconnMessageId` unique when a message is linked.
-- `Answer.nexconnMessageId` is unique.
-- `MessageTranslation` caches async results by `(messageId, targetLanguage)`.
-- `WebhookEvent.externalId` is unique for idempotent webhook processing.
-- `Participant` has `@@unique([roomId, userId])`.
-- All cascade deletes are explicit; optional FKs use `SetNull`.
-
-SQLite does not enforce enum types, so application code validates every status
-transition with Zod and the role/status unions.
-
----
-
-## 7. Phase log
-
-| Phase | Scope | State |
+| Area | Status | Location |
 |---|---|---|
-| 0 | Scaffold, schema, migration, env, contracts, UI shell, health | ✅ Done |
-| 1 | Host auth, room creation, QR, public room page | ✅ Done |
-| 2 | Identity, join flow, Nexconn token issuance | ⏳ Next |
-| 3 | Live channel transport, question submission/feed | ⏳ |
-| 4 | Persistence, history, webhooks | ⏳ |
-| 5 | Translation pipeline for questions/answers | ⏳ |
-| 6 | Moderation controls | ⏳ |
-| 7 | Votes and deduplication | ⏳ |
-| 8 | Answers, room closure, polish | ⏳ |
-| 9 | Hardening, tests, docs, production migration | ⏳ |
+| Next.js 16 App Router + TypeScript + Tailwind scaffold | Built | `src/app/`, `src/components/` |
+| Prisma schema and initial SQLite migration | Built | `prisma/schema.prisma`, `prisma/migrations/` |
+| Zod environment validation and startup enforcement | Built | `src/lib/env.ts`, `src/server/startup.ts`, `src/instrumentation.ts` |
+| Shared API envelope, error codes and JSON parsing | Built | `src/lib/api/*` |
+| Same-origin check for state-changing requests | Built | `src/lib/api/request.ts` |
+| In-process fixed-window rate limiting | Built | `src/server/auth/rate-limit.ts` |
+| Host auth: scrypt passwords, DB-backed sessions, HttpOnly cookie | Built | `src/server/auth/*`, `src/app/api/auth/*` |
+| Room creation, join codes, QR share links | Built | `src/server/rooms/*`, `src/app/api/rooms/route.ts` |
+| Health endpoint with a database probe | Built | `src/app/api/health/route.ts` |
+| Chat provider seam (`ServerChatProvider` / `ChatClientTransport`) | Built | `src/lib/chat/contracts.ts` |
+| Local development chat provider | Dev-only | `src/server/chat/local.ts` |
+| Nexconn server chat adapter | Built (untested live) | `src/server/chat/nexconn.ts` |
+| Nexconn signed server HTTP client | Built (untested live) | `src/server/nexconn/client.ts` |
+| Nexconn request signing + webhook signature verification | Built | `src/server/nexconn/signing.ts`, `src/server/webhooks/signature.ts` |
+| Live-event wire format over text messages | Built | `src/lib/chat/events.ts` |
+| Browser Nexconn transport | Built (untested live, not yet mounted in a page) | `src/client/chat/nexconn.ts` |
+| Room join route (guest identity + participant + token issuance) | Built (untested live) | `src/app/api/rooms/[joinCode]/join/route.ts` |
+| Nexconn webhook receiver | Built (untested live) | `src/app/api/webhooks/nexconn/route.ts` |
+| Translation provider seam | Built | `src/lib/translation/contracts.ts`, `src/server/translation/index.ts` |
+| Passthrough translation fallback | Dev-only | `src/server/translation/passthrough.ts` |
+| LibreTranslate adapter | Stubbed | `src/server/translation/libretranslate.ts` |
+| Nexconn server translation adapter | Stubbed (by design) | `src/server/translation/nexconn.ts` |
+| Student question/timeline UI, votes, moderation, answers, history | Not built | Phases 3–8 |
 
 ---
 
-## 8. Verification
+## 3. The provider seams
 
-Commands (Windows PowerShell; use `npm.cmd`/`npx.cmd` if the execution policy
-blocks the shims):
+The domain code never talks to Nexconn directly. Two seams keep it swappable:
 
-```bash
-npm.cmd run test
-npm.cmd run typecheck
-npm.cmd run lint
-npm.cmd run build
-```
+1. **`ServerChatProvider`** (`src/lib/chat/contracts.ts`) — server-side
+   operations. Two implementations: `LocalChatProvider` (default) and
+   `NexconnChatProvider`. Selected at runtime by
+   `getChatProvider()` (`src/server/chat/index.ts`) from
+   `NEXCONN_CHAT_PROVIDER`.
+2. **`ChatClientTransport`** — browser-side transport. `NexconnChatTransport`
+   wraps the `@nexconn/chat` Web SDK; the local SSE transport is still to be
+   written.
 
-Expected Phase 1 result: all four pass. `GET /api/health` returns
-`{ "ok": true, "data": { "status": "ok", "database": "connected", … } }`.
+`TranslationProvider` works the same way, selected by `TRANSLATION_PROVIDER`.
 
-End-to-end smoke test performed against the dev server:
-
-1. `GET /host` without a session renders the sign-in page.
-2. `POST /api/auth/register` returns 201, sets an HttpOnly cookie, and
-   `GET /api/auth/me` returns the host.
-3. `POST /api/rooms` returns 201 with a join code, a `local_*` channel ID, and
-   a `data:image/png` QR data URL.
-4. `GET /join/<code>` returns 200 and contains the room title.
-5. `GET /host/rooms/<code>` returns 200 for the owner.
-6. `POST /api/auth/logout` clears the session; `/host` shows sign-in again.
-7. Unauthenticated `POST /api/rooms` returns 401, duplicate registration returns
-   409, and a wrong password returns 401.
-
-Manual layout checks: `/`, `/host/login`, `/host/register`, `/host`,
-`/host/rooms/<code>`, `/join`, `/join/<code>` at 360 px and 1440 px widths.
-
-Hardening checks (Phase 1 review fixes):
-
-- A production build with `NODE_ENV=production` and no `SESSION_SECRET` completes
-  route collection and static generation successfully.
-- `next start` without `SESSION_SECRET`, or with one shorter than 32
-  characters, exits with code 1 and a clear message before serving traffic.
-  With a valid secret it starts and `GET /api/health` returns 200.
-- With the default `TRUSTED_PROXY_HEADER="none"`, six registration attempts
-  carrying six different spoofed `X-Forwarded-For` values returned
-  `201,201,201,201,201,429`: the header is ignored and all requests share one
-  bucket.
-- With `TRUSTED_PROXY_HEADER="x-forwarded-for"` and `TRUSTED_PROXY_HOPS="1"`,
-  five attempts from one IP were allowed, the sixth from that IP returned 429,
-  and an attempt from a different IP returned 201.
-- `npm run test` covers single-IP headers, one- and two-hop chains, chains that
-  are too short, invalid chain entries, single-address headers, IPv6, and
-  oversized headers.
+Provider modules import `server-only` so they cannot be pulled into a browser
+bundle. `signing.ts` and `webhooks/signature.ts` are intentionally guard-free
+because they take the secret as an argument and are covered by Node tests.
 
 ---
 
-## 9. Known issues and follow-ups
+## 4. Nexconn wiring added in this pass
 
-1. Prisma CLI advisory (`deepmerge-ts`) — needs Prisma 7; deferred.
-2. `.env` exists locally with a dev secret; it is gitignored. Production must
-   use the host's secret manager.
-3. `AGENTS.md` is regenerated by `next dev`; keep the Next 16 rules block in
-   commits.
-4. ESLint can appear to hang on a cold run while it resolves the flat config;
-   the second run is fast.
-5. Only focused unit tests for trusted client-IP resolution exist; broader
-   coverage arrives in Phase 9.
-6. The rate limiter is in-process. Replace it with a shared store before running
-   more than one server instance.
-7. There is no email verification or password-reset flow yet; registration is
-   open and should be restricted or verified before a public launch.
-8. `/join/<code>` deliberately stops before the name/language step. Phase 2
-   adds participant identity and Nexconn token issuance.
-9. Room closure exists in the schema and UI states, but the host close action is
-   not wired yet (Phase 8).
+The full contract table with official sources lives in
+[`docs/nexconn-integration-contract.md`](./nexconn-integration-contract.md).
+This section records the code shape.
+
+### 4.1 Signed server HTTP client — `src/server/nexconn/client.ts`
+
+- `readNexconnCredentials()` throws `IntegrationNotConfiguredError` (503) when
+  the App Key or App Secret is missing, instead of failing on the network.
+- `resolveBaseUrls()` returns the configured regional host plus the documented
+  `api-b.<region>` backup when the URL matches the published naming.
+- `nexconnRequest(endpoint, body)` signs every request with
+  `sha1(AppSecret + Nonce + Timestamp)` and the `App-Key` / `Nonce` /
+  `Timestamp` / `Signature` headers, posts JSON, and unwraps `{ code, result }`.
+  A 5-second timeout, a network error, or a 5xx response moves to the backup
+  host; a non-zero Nexconn `code` is reported as a business error and does not
+  fail over.
+
+### 4.2 Server chat adapter — `src/server/chat/nexconn.ts`
+
+| Method | Nexconn call |
+|---|---|
+| `createChannel` | `POST /v4/open-channel/create` |
+| `closeChannel` | `POST /v4/open-channel/destroy` |
+| `issueUserToken` | `POST /v4/auth/access-token/issue` |
+| `publishEvent` | `POST /v4/open-channel/message/send` |
+
+`channelIdForRoom(roomId)` reuses the Vaani room id as the open-channel id. The
+docs publish no channel-id format, so this is flagged as an assumption.
+
+Structured room events have nowhere to live on the server API (no metadata
+field), so `publishEvent` serializes them with `encodeLiveEvent()` into the
+text body.
+
+### 4.3 Live-event wire format — `src/lib/chat/events.ts`
+
+`encodeLiveEvent` / `decodeLiveEvent` wrap a `LiveEvent` with a `vaani.live-event`
+marker inside the message text. Messages the browser sends attach the same
+information as SDK metadata (`MESSAGE_METADATA_KEYS`), which the server API
+cannot send but the client SDK can.
+
+### 4.4 Browser transport — `src/client/chat/nexconn.ts`
+
+`NexconnChatTransport implements ChatClientTransport`:
+
+- initializes `NCEngine` once, connects with the issued token, and enters the
+  open channel;
+- sends a question as a text message with metadata;
+- decodes inbound text messages back into `LiveEvent`s for `onEvent` listeners;
+- exposes `translateMessage(...)`, which uses
+  `NCEngine.translateModule.translateMessages` and turns
+  `onTranslationCompleted` results into `translation.updated` events.
+
+It is not yet mounted in a page; the student room UI is the next step.
+
+### 4.5 Join route — `src/app/api/rooms/[joinCode]/join/route.ts`
+
+`POST` validates the join code and body, rate-limits by client key, resolves or
+creates a pseudonymous participant (a guest `User` plus a `Participant` row and
+a session cookie), issues the Nexconn token through the chat provider, and
+returns the room summary, participant summary, and the chat connection config.
+The response contains the App Key and the user token — never the App Secret.
+
+### 4.6 Webhook receiver — `src/app/api/webhooks/nexconn/route.ts`
+
+`POST` verifies the `AppKey` / `Nonce` / `Timestamp` / `Signature` headers
+against the App Secret **before** parsing the body, rejects bad signatures with
+401, validates the `{ type, id, time, data }` envelope, and stores the raw body
+in `WebhookEvent` keyed by the unique `externalId`. Repeated deliveries return
+200 with `duplicate: true`. Per-event payload interpretation is intentionally
+not implemented yet.
+
+---
+
+## 5. Conventions worth keeping
+
+- **API envelope:** every route returns `{ ok: true, data }` or
+  `{ ok: false, error: { code, message, details? } }` via
+  `apiSuccess` / `apiFailure` / `apiError`. `apiError` maps `AppError`,
+  `ZodError`, and Prisma `P2002`/`P2025` and logs anything else.
+- **Validation:** request bodies are parsed with a Zod schema; invalid input
+  becomes a 422 with `fieldErrors`.
+- **Runtime:** routes that touch Prisma or secrets declare
+  `runtime = "nodejs"` and `dynamic = "force-dynamic"`.
+- **Secrets:** nothing sensitive may be referenced from a `NEXT_PUBLIC_*`
+  variable or a client component. Provider modules carry `server-only`.
+- **Honest failure:** when a capability is not connected, the code returns an
+  explicit "unavailable"/"not configured" result rather than faking success.
+
+---
+
+## 6. Verification performed
+
+Run from the repository root:
+
+| Command | Result |
+|---|---|
+| `npm run typecheck` | pass |
+| `npm run lint` | pass |
+| `npm run test` | pass — 21 tests (client IP, request signing, webhook signature) |
+| `npm run build` | pass — `/api/rooms/[joinCode]/join` and `/api/webhooks/nexconn` compile as dynamic routes |
+
+These confirm the code matches its contracts and the existing tests still pass.
+They do **not** prove the Nexconn integration works; that requires a real
+application and Console access.
+
+---
+
+## 7. Known gaps
+
+- Student and host live room UI (questions, votes, translations, moderation,
+  answers, history) is not built.
+- The local SSE transport is still missing; `ChatClientTransport` has only the
+  Nexconn implementation so far.
+- The join route issues tokens but nothing consumes them yet in the UI.
+- Webhook events are archived, not interpreted.
+- Server-side translation is not possible (results are client-only), so
+  `src/server/translation/nexconn.ts` stays honest about being unavailable.
+- Every `NEEDS-CONSOLE-CONFIRMATION` item in the contract document is still open.
