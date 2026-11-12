@@ -9,7 +9,10 @@ import { prisma } from "@/lib/db";
 import type { AnswerSummary, QuestionSummary } from "@/lib/room/types";
 import type { CreateAnswerInput, SubmitQuestionInput } from "@/lib/validation";
 import { publishRoomEvent } from "@/server/chat/live";
-import type { RoomAccessSnapshot } from "@/server/rooms/access";
+import {
+  assertOpenRoomForWrite,
+  type RoomAccessSnapshot,
+} from "@/server/rooms/access";
 
 /**
  * Questions, votes, moderation and answers.
@@ -85,7 +88,8 @@ function toSummary(
 ): QuestionSummary {
   const viewerUserId = viewer.kind === "student" ? viewer.userId : null;
   const canSeeAuthor =
-    viewer.kind === "host" || viewerUserId === row.askedByUserId;
+    (viewer.kind === "host" || viewerUserId === row.askedByUserId) &&
+    (!row.isAnonymous || viewerUserId === row.askedByUserId);
   const latestAnswer = row.answers[0];
 
   return {
@@ -125,19 +129,31 @@ export async function createQuestion(
     where: nonceWhere,
     select: questionSelect,
   });
-  if (existing) return toSummary(existing, viewer, false);
+  if (existing) {
+    if (existing.askedByUserId !== authorUserId) {
+      throw new AppError(
+        "CONFLICT",
+        "That client nonce has already been used.",
+        409,
+      );
+    }
+    return toSummary(existing, viewer, false);
+  }
 
   try {
-    const created = await prisma.question.create({
-      data: {
-        roomId: room.id,
-        askedByUserId: authorUserId,
-        clientNonce: input.clientNonce,
-        originalText: input.text,
-        sourceLanguage: input.sourceLanguage,
-        isAnonymous: input.isAnonymous,
-      },
-      select: questionSelect,
+    const created = await prisma.$transaction(async (tx) => {
+      await assertOpenRoomForWrite(tx, room.id);
+      return tx.question.create({
+        data: {
+          roomId: room.id,
+          askedByUserId: authorUserId,
+          clientNonce: input.clientNonce,
+          originalText: input.text,
+          sourceLanguage: input.sourceLanguage,
+          isAnonymous: input.isAnonymous,
+        },
+        select: questionSelect,
+      });
     });
 
     await publishRoomEvent(room.nexconnChannelId, room.id, "question.created", {
@@ -153,7 +169,16 @@ export async function createQuestion(
         where: nonceWhere,
         select: questionSelect,
       });
-      if (raced) return toSummary(raced, viewer, false);
+      if (raced) {
+        if (raced.askedByUserId !== authorUserId) {
+          throw new AppError(
+            "CONFLICT",
+            "That client nonce has already been used.",
+            409,
+          );
+        }
+        return toSummary(raced, viewer, false);
+      }
     }
     throw error;
   }
@@ -250,14 +275,15 @@ export async function castVote(
   }
 
   try {
-    const [, updated] = await prisma.$transaction([
-      prisma.vote.create({ data: { questionId: question.id, userId } }),
-      prisma.question.update({
+    const updated = await prisma.$transaction(async (tx) => {
+      await assertOpenRoomForWrite(tx, room.id);
+      await tx.vote.create({ data: { questionId: question.id, userId } });
+      return tx.question.update({
         where: { id: question.id },
         data: { upvoteCount: { increment: 1 } },
         select: { upvoteCount: true },
-      }),
-    ]);
+      });
+    });
 
     await publishRoomEvent(room.nexconnChannelId, room.id, "vote.updated", {
       questionId: question.id,
@@ -290,6 +316,7 @@ export async function removeVote(
   if (!question) throw notFound("We could not find that question in this room.");
 
   const upvoteCount = await prisma.$transaction(async (tx) => {
+    await assertOpenRoomForWrite(tx, room.id);
     const deleted = await tx.vote.deleteMany({
       where: { questionId: question.id, userId },
     });
@@ -327,15 +354,18 @@ export async function createAnswer(
   });
   if (!question) throw notFound("We could not find that question in this room.");
 
-  const answer = await prisma.answer.create({
-    data: {
-      questionId: question.id,
-      lecturerUserId,
-      answerText: input.answerText,
-      answerLanguage: input.answerLanguage,
-      isPinned: input.isPinned,
-    },
-    select: answerSelect,
+  const answer = await prisma.$transaction(async (tx) => {
+    await assertOpenRoomForWrite(tx, room.id);
+    return tx.answer.create({
+      data: {
+        questionId: question.id,
+        lecturerUserId,
+        answerText: input.answerText,
+        answerLanguage: input.answerLanguage,
+        isPinned: input.isPinned,
+      },
+      select: answerSelect,
+    });
   });
 
   await publishRoomEvent(room.nexconnChannelId, room.id, "answer.created", {

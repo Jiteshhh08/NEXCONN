@@ -37,15 +37,15 @@ export async function GET(
     const room = await getPublicRoomByCode(joinCode);
     if (!room) throw notFound("We could not find that room.");
 
-    await assertRoomParticipant(room.id, user.id);
+    const participant = await assertRoomParticipant(room.id, user.id);
 
     const joined = await buildJoinedRoom({
       room,
       userId: user.id,
       role: user.role,
       displayName: user.displayName,
-      preferredLanguage: user.preferredLanguage,
-      isAnonymous: false,
+      preferredLanguage: participant.preferredLanguage,
+      isAnonymous: participant.isAnonymous,
     });
 
     return apiSuccess(joined);
