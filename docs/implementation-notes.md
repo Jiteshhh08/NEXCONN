@@ -21,8 +21,12 @@
 | **Stubbed** | Deliberately honest about not being connected; returns an explicit "not available" result. |
 | **Not built** | Planned but absent. |
 
-Nothing in this project has been exercised against a live Nexconn application
-yet. The team has no Console access, so **no feature is live-tested**.
+Nothing in this project was exercised against a live Nexconn application until
+the 2026-11-12 server-to-server probe (see
+[`docs/nexconn-integration-contract.md`](./nexconn-integration-contract.md) §I),
+which confirmed token issue, open-channel create, message send and destroy with
+`code: 0`. The **browser** flow has still not been driven end to end, so the
+student/host live relay is `NEEDS_VERIFICATION`.
 
 ---
 
@@ -41,18 +45,25 @@ yet. The team has no Console access, so **no feature is live-tested**.
 | Health endpoint with a database probe | Built | `src/app/api/health/route.ts` |
 | Chat provider seam (`ServerChatProvider` / `ChatClientTransport`) | Built | `src/lib/chat/contracts.ts` |
 | Local development chat provider | Dev-only | `src/server/chat/local.ts` |
-| Nexconn server chat adapter | Built (untested live) | `src/server/chat/nexconn.ts` |
-| Nexconn signed server HTTP client | Built (untested live) | `src/server/nexconn/client.ts` |
+| Nexconn server chat adapter | Built (server endpoints live-probed) | `src/server/chat/nexconn.ts` |
+| Nexconn signed server HTTP client | Built (server endpoints live-probed) | `src/server/nexconn/client.ts` |
 | Nexconn request signing + webhook signature verification | Built | `src/server/nexconn/signing.ts`, `src/server/webhooks/signature.ts` |
 | Live-event wire format over text messages | Built | `src/lib/chat/events.ts` |
-| Browser Nexconn transport | Built (untested live, not yet mounted in a page) | `src/client/chat/nexconn.ts` |
-| Room join route (guest identity + participant + token issuance) | Built (untested live) | `src/app/api/rooms/[joinCode]/join/route.ts` |
-| Nexconn webhook receiver | Built (untested live) | `src/app/api/webhooks/nexconn/route.ts` |
+| Browser Nexconn transport | Built — mounted in the room pages | `src/client/chat/nexconn.ts`, `src/client/chat/use-live-room.ts` |
+| Room join route (guest identity + participant + token issuance) | Built (token issue live-probed) | `src/app/api/rooms/[joinCode]/join/route.ts` |
+| Host live token route (owner-only channel token) | Built | `src/app/api/rooms/[joinCode]/chat-token/route.ts` |
+| Question ask/list routes (host all / student own+approved) | Built | `src/app/api/rooms/[joinCode]/questions/route.ts` |
+| Vote routes (cast / remove, duplicate-safe) | Built | `src/app/api/questions/[questionId]/votes/route.ts` |
+| Moderation + answer routes (owner-only) | Built | `src/app/api/questions/[questionId]/{moderation,answers}/route.ts` |
+| Room close route | Built | `src/app/api/rooms/[joinCode]/close/route.ts` |
+| Nexconn webhook receiver | Built (not live-tested — needs a public URL) | `src/app/api/webhooks/nexconn/route.ts` |
+| Student room UI (join, ask, upvote, live badge) | Built | `src/app/join/[code]/join-room-client.tsx` |
+| Host room UI (moderation, answers, close, live badge) | Built | `src/app/host/rooms/[joinCode]/host-room-client.tsx` |
+| Shared browser-safe room DTOs + API fetch helper | Built | `src/lib/room/types.ts`, `src/lib/api/client.ts` |
 | Translation provider seam | Built | `src/lib/translation/contracts.ts`, `src/server/translation/index.ts` |
 | Passthrough translation fallback | Dev-only | `src/server/translation/passthrough.ts` |
 | LibreTranslate adapter | Stubbed | `src/server/translation/libretranslate.ts` |
 | Nexconn server translation adapter | Stubbed (by design) | `src/server/translation/nexconn.ts` |
-| Student question/timeline UI, votes, moderation, answers, history | Not built | Phases 3–8 |
 
 ---
 
@@ -131,7 +142,11 @@ cannot send but the client SDK can.
   `NCEngine.translateModule.translateMessages` and turns
   `onTranslationCompleted` results into `translation.updated` events.
 
-It is not yet mounted in a page; the student room UI is the next step.
+It is mounted through `src/client/chat/use-live-room.ts`, a hook that connects
+only when the provider is `nexconn` and the App Key, token, user id and channel
+id are all present; otherwise it stays `idle` and the room pages keep working
+through polling. Both the student page (`src/app/join/[code]/join-room-client.tsx`)
+and the host page (`src/app/host/rooms/[joinCode]/host-room-client.tsx`) use it.
 
 ### 4.5 Join route — `src/app/api/rooms/[joinCode]/join/route.ts`
 
@@ -140,6 +155,11 @@ creates a pseudonymous participant (a guest `User` plus a `Participant` row and
 a session cookie), issues the Nexconn token through the chat provider, and
 returns the room summary, participant summary, and the chat connection config.
 The response contains the App Key and the user token — never the App Secret.
+
+The host console obtains its own channel token from the owner-only
+`POST /api/rooms/[joinCode]/chat-token` route
+(`src/app/api/rooms/[joinCode]/chat-token/route.ts`) so it receives the same
+live events students do.
 
 ### 4.6 Webhook receiver — `src/app/api/webhooks/nexconn/route.ts`
 
@@ -177,23 +197,28 @@ Run from the repository root:
 |---|---|
 | `npm run typecheck` | pass |
 | `npm run lint` | pass |
-| `npm run test` | pass — 21 tests (client IP, request signing, webhook signature) |
-| `npm run build` | pass — `/api/rooms/[joinCode]/join` and `/api/webhooks/nexconn` compile as dynamic routes |
+| `npm run test` | pass — **51 tests / 10 suites / 0 fail** (validation 24, chat events 6, client IP 10, Nexconn signing 5, webhook signature 6) |
+| `npm run build` | pass — Next.js 16.4.6; all routes emitted, including `/api/rooms/[joinCode]/{join,chat-token,questions,close}`, `/api/questions/[questionId]/{answers,moderation,votes}`, `/api/webhooks/nexconn`, `/join/[code]`, `/host/rooms/[joinCode]` |
 
-These confirm the code matches its contracts and the existing tests still pass.
-They do **not** prove the Nexconn integration works; that requires a real
-application and Console access.
+These confirm the code matches its contracts and that the automated tests pass.
+They do **not** prove the browser flow against a live account. The **server**
+endpoints were separately live-probed on 2026-11-12 (`code: 0` on token issue,
+channel create, message send, destroy) — see
+[`docs/nexconn-integration-contract.md`](./nexconn-integration-contract.md) §I.
 
 ---
 
 ## 7. Known gaps
 
-- Student and host live room UI (questions, votes, translations, moderation,
-  answers, history) is not built.
 - The local SSE transport is still missing; `ChatClientTransport` has only the
-  Nexconn implementation so far.
-- The join route issues tokens but nothing consumes them yet in the UI.
+  Nexconn implementation so far. When Nexconn is not configured the room pages
+  fall back to polling rather than a live stream.
 - Webhook events are archived, not interpreted.
 - Server-side translation is not possible (results are client-only), so
   `src/server/translation/nexconn.ts` stays honest about being unavailable.
-- Every `NEEDS-CONSOLE-CONFIRMATION` item in the contract document is still open.
+- The browser relay (student ⇄ host over the live Open Channel) has not been
+  driven against a live account, so it is `NEEDS_VERIFICATION` even though the
+  server endpoints it depends on were live-probed.
+- Every `NEEDS-CONSOLE-CONFIRMATION` item in the contract document is still open
+  (token expiry, plan limits, translation enablement, webhook URL registration,
+  per-event payload shapes).

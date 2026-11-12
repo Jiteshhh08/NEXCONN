@@ -6,6 +6,7 @@ import { AppError, forbidden, notFound } from "@/lib/api/errors";
 import { MODERATION_STATUSES } from "@/lib/domain";
 import type { HostModerationAction, ModerationStatus } from "@/lib/domain";
 import { prisma } from "@/lib/db";
+import type { AnswerSummary, QuestionSummary } from "@/lib/room/types";
 import type { CreateAnswerInput, SubmitQuestionInput } from "@/lib/validation";
 import { publishRoomEvent } from "@/server/chat/live";
 import type { RoomAccessSnapshot } from "@/server/rooms/access";
@@ -19,30 +20,6 @@ import type { RoomAccessSnapshot } from "@/server/rooms/access";
  *   - Question: unique (roomId, clientNonce)  -> idempotent submission
  *   - Vote:     unique (questionId, userId)   -> one vote per participant
  */
-
-export interface AnswerSummary {
-  id: string;
-  answerText: string;
-  answerLanguage: string;
-  isPinned: boolean;
-  createdAt: string;
-}
-
-export interface QuestionSummary {
-  id: string;
-  roomId: string;
-  /** Null for an anonymous question the viewer did not ask. */
-  askedByUserId: string | null;
-  originalText: string;
-  sourceLanguage: string;
-  hostTranslation: string | null;
-  isAnonymous: boolean;
-  moderationStatus: ModerationStatus;
-  upvoteCount: number;
-  createdAt: string;
-  hasVoted: boolean;
-  answer: AnswerSummary | null;
-}
 
 export type QuestionViewer =
   | { kind: "host" }

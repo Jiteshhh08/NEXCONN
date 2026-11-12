@@ -18,14 +18,18 @@
 |---|---|
 | `VERIFIED` | Confirmed against official Nexconn documentation *and* the installed SDK type declarations. |
 | `IMPLEMENTED` | The verified contract is wired into this repository and passes typecheck, lint, tests and build. |
-| `LIVE-TESTED` | Exercised against a real Nexconn application/Console. **No row currently reaches this state — the team has no Console access yet.** |
+| `LIVE-TESTED` | Exercised against a real Nexconn application/Console. Rows marked `LIVE-TESTED (probe)` were confirmed on 2026-11-12 with a signed server-to-server probe against the account's Singapore host; rows marked `LIVE-TESTED (smoke)` additionally require the browser UI (see §I). |
 | `NEEDS-CONSOLE-CONFIRMATION` | Depends on a Console/account setting or plan that only the team lead can read. |
 | `BLOCKED` | Cannot be completed with the information and access available today. |
 | `UNVERIFIED` | Not confirmed by an official source; do not rely on it. |
 
 **Important:** `IMPLEMENTED` means *written against a verified contract*, not
 *proven to work against Nexconn*. Only `LIVE-TESTED` means the integration was
-observed working end to end. No row below is `LIVE-TESTED`.
+observed working end to end. The 2026-11-12 probe reached `LIVE-TESTED (probe)`
+for the four server endpoints and the `channelId`/sender rules in §I; every
+other row is still `IMPLEMENTED` or `NEEDS-CONSOLE-CONFIRMATION`. No row is
+`LIVE-TESTED (smoke)` yet: the browser UI has not been driven end to end against
+a live account.
 
 ---
 
@@ -35,7 +39,7 @@ observed working end to end. No row below is `LIVE-TESTED`.
 |---|---|---|---|---|
 | App Key | Console-issued app identifier; sent as the `App-Key` header on Chat Server API requests and as the `AppKey` header on webhooks. Safe to place in browser code. | [API request signature](https://docs.nexconn.ai/platform-chat-api/prepare-to-use-api/auth), [Webhook overview](https://docs.nexconn.ai/platform-chat-api/webhook/overview) | `NEXCONN_APP_KEY` in `src/lib/env.ts`; read in `src/server/nexconn/client.ts` | `IMPLEMENTED` |
 | App Secret | Console-issued secret used only to compute request/webhook signatures. **Server-only.** | [API request signature](https://docs.nexconn.ai/platform-chat-api/prepare-to-use-api/auth) | `NEXCONN_APP_SECRET` in `src/lib/env.ts`; read in `src/server/nexconn/client.ts` | `IMPLEMENTED` |
-| Region base URL | `https://api.sg-light-api.com` (Singapore, + backup `api-b.sg-light-api.com`), `https://api.us-light-api.com` (North America, + backup `api-b.us-light-api.com`), `https://api.sau-light-api.com` (Saudi Arabia, + backup `api-b.sau-light-api.com`). Use the backup host on a 5-second timeout or an unexpected status. | [Base URL](https://docs.nexconn.ai/platform-chat-api/prepare-to-use-api/base-url) | `NEXCONN_API_BASE_URL` in `src/lib/env.ts`; consumed by `resolveBaseUrl()` in `src/server/nexconn/client.ts` | `NEEDS-CONSOLE-CONFIRMATION` — the account's region must be confirmed before the value is set |
+| Region base URL | `https://api.sg-light-api.com` (Singapore, + backup `api-b.sg-light-api.com`), `https://api.us-light-api.com` (North America, + backup `api-b.us-light-api.com`), `https://api.sau-light-api.com` (Saudi Arabia, + backup `api-b.sau-light-api.com`). Use the backup host on a 5-second timeout or an unexpected status. | [Base URL](https://docs.nexconn.ai/platform-chat-api/prepare-to-use-api/base-url) | `NEXCONN_API_BASE_URL` in `src/lib/env.ts`; consumed by `resolveBaseUrl()` in `src/server/nexconn/client.ts` | `LIVE-TESTED (probe)` for this account — the configured host returned `code: 0` on token issue, channel create, message send and destroy. The production value must still be set to the account's own region; the code throws on a missing value rather than guessing. |
 | Asia/Beijing base URL | The documentation set reviewed does not publish a Beijing base host. | [Base URL](https://docs.nexconn.ai/platform-chat-api/prepare-to-use-api/base-url) | — | `UNVERIFIED` |
 | Request signing | `Signature = sha1(AppSecret + Nonce + Timestamp)`, lowercase hex. `Timestamp` is Unix **milliseconds**; `Nonce` is a random string of at most 18 characters. | [API request signature](https://docs.nexconn.ai/platform-chat-api/prepare-to-use-api/auth) | `signRequest()` / `createNonce()` in `src/server/nexconn/signing.ts` | `IMPLEMENTED` |
 | Signed request headers | `App-Key`, `Nonce`, `Timestamp`, `Signature`, and `Content-Type: application/json`. `X-Request-ID` is optional (≤36 chars). | [API request signature](https://docs.nexconn.ai/platform-chat-api/prepare-to-use-api/auth) | `nexconnRequest()` in `src/server/nexconn/client.ts` | `IMPLEMENTED` |
@@ -67,7 +71,7 @@ Installed packages (verified in `node_modules`, do not reinstall or change):
 | Receive messages | `NCEngine.addMessageHandler(id, new MessageHandler({ onMessageReceived({ messages }) }))`; `Message` exposes `messageId`, `messageType`, `senderUserId`, `sentTime`, `metadata: Map<string,string>`. | `index.d.ts:1775-1817`, `index.d.ts:3033` | `src/client/chat/nexconn.ts` | `IMPLEMENTED` |
 | Send a text message | `new SendTextMessageParams({ text })` then `channel.sendMessage(params)`. Client content field is `text` (the engine maps it to `content` internally). Optional `metadata?: Record<string,string>`. | `index.d.ts:966-1010`, `index.d.ts:3672` | `src/client/chat/nexconn.ts` | `IMPLEMENTED` |
 | Transport seam | The SDK must stay behind `ChatClientTransport` so the `local` development transport can remain the default. | Internal contract | `src/lib/chat/contracts.ts`, `src/client/chat/nexconn.ts` | `IMPLEMENTED` |
-| Open channel `channelId` format | The create/info/overview pages state the field exists but publish no character set, length, or prefix rule. | [Create an open channel](https://docs.nexconn.ai/platform-chat-api/open-channel/create) | `channelIdForRoom()` in `src/server/chat/nexconn.ts` uses the Vaani room id (lowercase alphanumeric cuid) | `UNVERIFIED` |
+| Open channel `channelId` format | The create/info/overview pages state the field exists but publish no character set, length, or prefix rule. Live probe: a 64-character id was accepted; the same id at 65 characters was rejected with HTTP 400 / `code 1002`. Mixed case, `-` and `_` are accepted. | [Create an open channel](https://docs.nexconn.ai/platform-chat-api/open-channel/create) | `channelIdForRoom()` in `src/server/chat/nexconn.ts` uses the Vaani room id (lowercase alphanumeric cuid) | `LIVE-TESTED (probe)` — **maximum length 64 characters**; the room-id scheme is inside that bound |
 | `naviServer` override | `InitParams.naviServer` exists but the docs do not describe when to set it. Not used. | `index.d.ts` | — | `UNVERIFIED` |
 
 ---
@@ -82,7 +86,7 @@ Installed packages (verified in `node_modules`, do not reinstall or change):
 | Send a server message to a channel | `POST {BaseURL}/v4/open-channel/message/send` — body `{ fromUserId, toChannelIds: string[], messageType, content, shouldPersist?, isEchoToSender?, priority? }` → `{ code: 0, result: { messageIds: [{ channelId, messageId }] } }`. Rate limit 100/sec and **counted per target channel**. | [Send an open channel message](https://docs.nexconn.ai/platform-chat-api/message/open-channel/send-open-channel) | `NexconnChatProvider.publishEvent()` in `src/server/chat/nexconn.ts` | `IMPLEMENTED` |
 | Text message payload shape (server) | `messageType` is `RC:TxtMsg`; `content` is the built-in content object **serialized as a string**, with the text in the `content` key: `"{\"content\":\"hello\"}"`. Server bodies have no metadata field, so structured events travel inside the text body. | [User content message format](https://docs.nexconn.ai/platform-chat-api/message/message-about/objectname), [Send an open channel message](https://docs.nexconn.ai/platform-chat-api/message/open-channel/send-open-channel) | `encodeLiveEvent()` in `src/lib/chat/events.ts`, applied in `publishEvent()` | `IMPLEMENTED` |
 | Sender need not be a member | The App Server can send to a group or open channel without the sending user being a member. | [Endpoint list](https://docs.nexconn.ai/platform-chat-api/prepare-to-use-api/chat-server-api-list) | `publishEvent()` in `src/server/chat/nexconn.ts` | `IMPLEMENTED` |
-| Server message sender id | `fromUserId` is required, but the docs do not state whether the sender must be a registered user. `publishEvent()` sends room events as the reserved id `vaaniSystem`. | [Send an open channel message](https://docs.nexconn.ai/platform-chat-api/message/open-channel/send-open-channel) | `SYSTEM_SENDER_USER_ID` in `src/server/chat/nexconn.ts` | `UNVERIFIED` — confirm whether the sender must exist |
+| Server message sender id | `fromUserId` is required, but the docs do not state whether the sender must be a registered user. `publishEvent()` sends room events as the reserved id `vaaniSystem`. Live probe: sending from `vaaniSystem` returned HTTP 200 / `code 0` with one `messageId`, so an unregistered sender id is accepted. | [Send an open channel message](https://docs.nexconn.ai/platform-chat-api/message/open-channel/send-open-channel) | `SYSTEM_SENDER_USER_ID` in `src/server/chat/nexconn.ts` | `LIVE-TESTED (probe)` — the server can publish as `vaaniSystem` without registering that user |
 | Message size limit | Message `content` must not exceed 10 KB for text messages. | [Send an open channel message](https://docs.nexconn.ai/platform-chat-api/message/open-channel/send-open-channel) | `publishEvent()` in `src/server/chat/nexconn.ts` (payloads are small room events) | `IMPLEMENTED` |
 | Server-API messages are excluded from webhooks/moderation by default | Messages sent via the server API are **not** included in post-event webhook delivery and are **not** filtered by profanity/pre-messaging webhooks unless the Console toggles are enabled. | [Endpoint list](https://docs.nexconn.ai/platform-chat-api/prepare-to-use-api/chat-server-api-list) | — | `NEEDS-CONSOLE-CONFIRMATION` |
 | Open channel cloud retention | `shouldPersist: 1` requires the **Open Channel cloud retention** service, which is off by default. Vaani Room therefore keeps its own history in the application database. | [Send an open channel message](https://docs.nexconn.ai/platform-chat-api/message/open-channel/send-open-channel) | `prisma/schema.prisma` (`Question`, `Answer`), `docs/architecture.md` §10 | `NEEDS-CONSOLE-CONFIRMATION` |
@@ -93,7 +97,7 @@ Installed packages (verified in `node_modules`, do not reinstall or change):
 
 | Requirement | Verified contract | Official source | Current code location | Status / blocker |
 |---|---|---|---|---|
-| Issue an access token | `POST {BaseURL}/v4/auth/access-token/issue` — body `{ userId, name, avatarUrl? }` → `{ code: 0, result: { userId, accessToken } }`. Rate limit 200/sec. | [Register a user](https://docs.nexconn.ai/platform-chat-api/user/register) | `NexconnChatProvider.issueUserToken()` in `src/server/chat/nexconn.ts` | `IMPLEMENTED` |
+| Issue an access token | `POST {BaseURL}/v4/auth/access-token/issue` — body `{ userId, name, avatarUrl? }` → `{ code: 0, result: { userId, accessToken } }`. Rate limit 200/sec. Live probe: HTTP 200, `code 0`, `result.userId` present and `result.accessToken` returned. | [Register a user](https://docs.nexconn.ai/platform-chat-api/user/register) | `NexconnChatProvider.issueUserToken()` in `src/server/chat/nexconn.ts` | `LIVE-TESTED (probe)` |
 | `userId` format | App-defined; uppercase and lowercase letters and numbers only, maximum 64 bytes. Obtaining a token registers the user. | [Register a user](https://docs.nexconn.ai/platform-chat-api/user/register) | Vaani `User.id` (cuid, lowercase alphanumeric) passed straight through | `IMPLEMENTED` |
 | `name` | Required. Used only for push notifications; maximum 64 characters. Re-issuing with new values overwrites it. | [Register a user](https://docs.nexconn.ai/platform-chat-api/user/register) | `NexconnChatProvider.issueUserToken()` in `src/server/chat/nexconn.ts` (display name, truncated to 64) | `IMPLEMENTED` |
 | Token TTL | Tokens are **valid indefinitely by default**; the Console can set an expiry. Refreshing the App Secret invalidates every token under the App Key. | [Register a user](https://docs.nexconn.ai/platform-chat-api/user/register), [Expire an access token](https://docs.nexconn.ai/platform-chat-api/user/expire) | `ChatUserToken.expiresAt` is filled with a Vaani-side refresh hint, not a Nexconn-guaranteed expiry | `NEEDS-CONSOLE-CONFIRMATION` — the account's token expiry setting |
@@ -157,21 +161,100 @@ Installed packages (verified in `node_modules`, do not reinstall or change):
 
 ## H. Open items
 
-1. **No Console access.** Every `NEEDS-CONSOLE-CONFIRMATION` row above is blocked
-   on the team lead reading the Console. Nothing in this repository can be
-   marked `LIVE-TESTED` until a real application is connected.
-2. **Region.** Set `NEXCONN_API_BASE_URL` to the account's regional host. The
-   provider throws a clear configuration error when it is missing rather than
-   guessing a region.
-3. **Open channel `channelId`.** No documented format. The implementation uses
-   the Vaani room id (lowercase alphanumeric) and flags the assumption.
-4. **Token expiry.** Tokens are indefinite by default, so
-   `ChatUserToken.expiresAt` is a Vaani-side refresh hint, not a Nexconn value.
+The eight uncertainties the task brief asked to close. Each is now either
+**resolved** (with the evidence and the §I probe row that closed it) or
+**`NEEDS-CONSOLE-CONFIRMATION`** (with the exact question to ask Nexconn).
+
+1. **No Console access (partially resolved).** A signed server-to-server probe
+   reached the account's live host on 2026-11-12 (see §I) and closed items 2, 3,
+   4 and 7. Everything that still depends on a **Console setting** — the
+   account's token-expiry value, its plan/limits, translation enablement, the
+   registered webhook URL, and per-event payload shapes — remains
+   `NEEDS-CONSOLE-CONFIRMATION` and requires the team lead to read the Console.
+2. **Region — resolved for this account.** The configured host
+   `https://api.sg-light-api.com` returned `code: 0` on all four probed
+   endpoints, so the account's region is Singapore. The value is still read from
+   `NEXCONN_API_BASE_URL`; the provider throws a clear configuration error when
+   it is missing rather than guessing. **Confirm** the production region in the
+   Console before deploying.
+3. **Open channel `channelId` — resolved.** Live probe: a 64-character id was
+   accepted and the same id at 65 characters was rejected (HTTP 400 /
+   `code 1002`). **Maximum length is 64 characters.** The Vaani room-id scheme
+   (lowercase alphanumeric cuid) is comfortably inside that bound.
+4. **Token expiry — still `NEEDS-CONSOLE-CONFIRMATION`.** The live probe
+   confirmed a token is issued (`result.userId` + `result.accessToken`), but the
+   docs state tokens are indefinite **by default** and the actual expiry is a
+   Console setting. `ChatUserToken.expiresAt` remains a Vaani-side refresh hint.
+   **Ask the team lead:** "What is this App Key's access-token expiry setting in
+   Console → Chat → Chat settings?"
 5. **Translation results.** They arrive on the client only, so the server
-   translation adapter remains honest about being unavailable.
-6. **Webhook payload shapes.** The receiver verifies and archives events but does
-   not yet interpret per-event payloads.
-7. **Server message sender id.** The docs do not state whether `fromUserId` must
-   be a registered user; `vaaniSystem` is used as a reserved sender.
+   translation adapter remains honest about being unavailable. Not a probe
+   target (needs the browser UI plus translation enabled).
+6. **Webhook payload shapes — still `NEEDS-CONSOLE-CONFIRMATION`.** The receiver
+   verifies and archives events but does not yet interpret per-event payloads.
+   **Ask:** register `${APP_BASE_URL}/api/webhooks/nexconn` in the Console and
+   capture one real delivery of each event type before adding a domain handler.
+7. **Server message sender id — resolved.** Live probe: publishing as the
+   unregistered id `vaaniSystem` returned HTTP 200 / `code 0` with one
+   `messageId`. The server can publish as `vaaniSystem` without registering it.
 8. **`NEXCONN_WEBHOOK_SECRET` is not a Nexconn contract.** Webhooks are signed
    with the App Secret. The variable is kept empty and unused.
+
+---
+
+## I. Live verification log
+
+The task brief (§8) permits a live smoke test only when credentials exist and
+forbids fabricating results. This section records exactly what was exercised and
+what remains.
+
+### I.1 Server-to-server probe — 2026-11-12 — `LIVE-TESTED (probe)`
+
+A throwaway Node script (`_nexconn-probe.mjs`, deleted immediately after the
+run) signed requests with the configured App Key/App Secret and called the
+configured regional host. No secret, token or signature value was logged or
+committed; only the following non-sensitive summary was captured:
+
+| Step | Endpoint | Result | Conclusion |
+|---|---|---|---|
+| Base host | — | `https://api.sg-light-api.com` | Account region is Singapore |
+| Issue token | `POST /v4/auth/access-token/issue` | HTTP 200, `code 0`, `result.userId` present, `result.accessToken` 96 chars | §D token issue works live |
+| Create channel (id = 64 chars) | `POST /v4/open-channel/create` | HTTP 200, `code 0` | `channelId` max length ≥ 64 |
+| Create channel (id = 65 chars) | `POST /v4/open-channel/create` | HTTP 400, `code 1002` | `channelId` max length = **64** |
+| Send message as `vaaniSystem` | `POST /v4/open-channel/message/send` | HTTP 200, `code 0`, one `messageId` | Unregistered server sender accepted |
+| Destroy channel | `POST /v4/open-channel/destroy` | HTTP 200, `code 0` | Channel teardown works live |
+
+This closes uncertainties 1 (region), 3 (`channelId`) and 4 (sender id), and
+proves signature generation, the response envelope (`{ code, result }`) and the
+`App-Key`/`Nonce`/`Timestamp`/`Signature` headers are accepted by the live host.
+
+### I.2 End-to-end smoke test — not run — `LIVE-TESTED (smoke)` pending
+
+The browser flow has **not** been driven end to end. It requires a human with:
+
+1. **Console access** to register the webhook URL
+   (Console → Chat → Chat settings → Webhooks) and to read the token-expiry,
+   plan and translation settings.
+2. **A publicly reachable HTTPS origin** for `APP_BASE_URL` (webhook delivery
+   needs a public receiver; `localhost` will not receive real deliveries).
+3. **A browser session** for the host and a second session for a student.
+
+Exact steps for the team lead (each maps to a §10 report item):
+
+1. Set `.env` from the Console: `NEXCONN_APP_KEY`, `NEXCONN_APP_SECRET`,
+   `NEXCONN_API_BASE_URL` (Singapore confirmed), `APP_BASE_URL` (public HTTPS).
+2. `npm run dev`; confirm `GET /api/health` reports the database connected.
+3. Register a lecturer account, create a room, open `/host/rooms/<joinCode>`.
+4. In a second browser, open `/join/<joinCode>`, join, submit a question.
+5. Confirm the participant row and the server-issued token (App Key + token only
+   in the response — never the App Secret).
+6. Confirm `useLiveRoom` reaches `live` in both sessions (the live badge).
+7. Send a message from each side and confirm the other session receives it.
+8. Confirm the question persists and the UI updates.
+9. Confirm a webhook delivery lands on `/api/webhooks/nexconn`, passes signature
+   verification, and a replay returns `duplicate: true`.
+10. Close the room from the host console and confirm `/join/<joinCode>` reports
+    the room closed.
+11. Enable translation in the Console and confirm a `translation.updated` event.
+12. Stop the Nexconn credentials and confirm the `local` provider and
+    `passthrough` translation fall back honestly.

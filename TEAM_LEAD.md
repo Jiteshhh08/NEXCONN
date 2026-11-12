@@ -1,10 +1,13 @@
 # Vaani Room — Team Lead Handoff & Nexconn Integration Guide
 
-> **Status:** Nexconn integration wiring complete; **not yet exercised against a
-> live Nexconn application**. The team has no Console access, so nothing is
-> `LIVE-TESTED`. This document is the single checklist for the team lead to
-> connect the real Nexconn application and take the project to production.
-> Update it as each integration is verified.
+> **Status:** Nexconn integration wiring complete and the **server-to-server
+> endpoints live-probed** against the account's Singapore host on 2026-11-12
+> (`LIVE-TESTED (probe)` — see
+> [`docs/nexconn-integration-contract.md`](./docs/nexconn-integration-contract.md)
+> §I). The **browser end-to-end smoke test has not been run**: it needs Console
+> access, a public HTTPS origin, and two browser sessions. This document is the
+> single checklist for the team lead to connect the real Nexconn application and
+> take the project to production. Update it as each integration is verified.
 >
 > **Read this with:** [`README.md`](./README.md),
 > [`docs/architecture.md`](./docs/architecture.md) (proposed design),
@@ -32,14 +35,14 @@
 | Local dev chat provider + honest passthrough translation | ✅ Complete (preserved fallback) |
 | Responsive marketing shell (`/`, `/host`, `/join`) | ✅ Complete |
 | `GET /api/health` with database check | ✅ Complete |
-| Nexconn signed server HTTP client (failover, timeouts) | ✅ Built — not live-tested |
-| Nexconn server chat adapter (create/issue/publish/close) | ✅ Built — not live-tested |
-| Nexconn browser transport (`ChatClientTransport`) | ✅ Built — not live-tested, not yet mounted in a page |
-| Session/token issuance route (`POST /api/rooms/[joinCode]/join`) | ✅ Built — not live-tested |
-| Nexconn webhook receiver (verify → dedupe → ledger) | ✅ Built — not live-tested |
+| Nexconn signed server HTTP client (failover, timeouts) | ✅ Built — live-probed (SG host) |
+| Nexconn server chat adapter (create/issue/publish/close) | ✅ Built — live-probed (all four endpoints `code: 0`) |
+| Nexconn browser transport (`ChatClientTransport`) | ✅ Built — mounted in the student and host room pages |
+| Session/token issuance route (`POST /api/rooms/[joinCode]/join`) | ✅ Built — token issue live-probed |
+| Nexconn webhook receiver (verify → dedupe → ledger) | ✅ Built — not live-tested (needs a public URL) |
 | Nexconn built-in translation adapter | ⏳ Stubbed (`unavailable`) — needs Console confirmation (§4.5) |
-| Live student/host room UI (questions, votes, answers) | ⏳ Phases 2–8 |
-| Test suite and production hardening | ⏳ Phase 9 |
+| Student & host live room UI (join, ask, vote, moderate, answer, close) | ✅ Built — mounted at `/join/[code]` and `/host/rooms/[joinCode]` |
+| Test suite and production hardening | ✅ 51 tests passing; hardening ongoing (§7) |
 
 The application is deliberately runnable **without** Nexconn credentials:
 
@@ -137,26 +140,37 @@ Already installed and verified against the shipped type declarations:
 `NexconnChat`). The server and browser adapters are written against these
 symbols. Still to confirm with a live account:
 
-- [ ] The Open Channel id rules the adapter assumes: `channelId = roomId`
-      (allowed characters and length are **unverified**)
-- [ ] Which `fromUserId` the server may use when publishing room events
-      (currently a placeholder `vaaniSystem`, flagged `UNVERIFIED`)
-- [ ] Timestamp validity window for signed requests
+- [x] The Open Channel id rules the adapter assumes: `channelId = roomId`.
+      **Resolved by live probe:** maximum length **64 characters**; mixed case,
+      `-` and `_` accepted. The room id (lowercase alphanumeric cuid) is inside
+      the bound.
+- [x] Which `fromUserId` the server may use when publishing room events.
+      **Resolved by live probe:** the unregistered id `vaaniSystem` is accepted
+      (`code: 0`, one `messageId`).
+- [ ] Timestamp validity window for signed requests (**unverified** — no window
+      is enforced on inbound webhooks; the app sends the current time)
 - [ ] Whether published text messages can carry the metadata the browser
-      transport attaches
+      transport attaches (server bodies have no metadata field; structured
+      events are encoded into the text body instead)
 - [ ] Channel close/delete behaviour and any retention implications
 
 ### 4.3 User access tokens
 
 Implemented against the documented `POST /v4/auth/access-token/issue` endpoint
 (`{ userId, name }` → `{ userId, accessToken }`) and returned by
-`POST /api/rooms/[joinCode]/join`. Still to confirm:
+`POST /api/rooms/[joinCode]/join`. **Live-probed:** HTTP 200, `code 0`,
+`result.userId` and a 96-character `result.accessToken` returned. Still to
+confirm:
 
-- [ ] Real token TTL (the adapter currently uses a 24-hour refresh hint only;
-      the expiry is **not** returned by the documented response)
-- [ ] Required `userId` format (length, allowed characters, uniqueness scope)
+- [ ] Real token TTL. The docs state tokens are **indefinite by default** and the
+      expiry is a **Console setting**; the adapter uses a 24-hour refresh hint
+      only. **Ask the team lead:** what is this App Key's access-token expiry in
+      Console → Chat → Chat settings?
+- [ ] Required `userId` format (the docs allow letters and digits, max 64 bytes —
+      the Vaani cuid passes through unchanged)
 - [ ] Whether a per-user channel membership or join is required before the
-      browser may enter the channel
+      browser may enter the channel (the SDK's `enterChannel` is client-side
+      only; no server join API is documented)
 
 ### 4.4 Webhooks
 
@@ -232,13 +246,16 @@ Verify each step against the Console version the team actually has.
 | Request signing | `src/server/nexconn/signing.ts` | Built — `sha1(AppSecret + Nonce + Timestamp)` hex |
 | Server chat adapter | `src/server/chat/nexconn.ts` | Built — create channel, issue token, publish event, close channel |
 | Chat provider selector | `src/server/chat/index.ts` | Working (`local`/`nexconn`) |
-| Browser chat transport | `src/client/chat/nexconn.ts` | Built (not mounted in a page yet) — wraps `@nexconn/chat` behind `ChatClientTransport` |
+| Browser chat transport | `src/client/chat/nexconn.ts` | Built — wraps `@nexconn/chat` behind `ChatClientTransport`, mounted via `src/client/chat/use-live-room.ts` in the student and host room pages |
 | Live-event wire format | `src/lib/chat/events.ts` | Built — structured events encoded into text messages |
 | Translation adapter | `src/server/translation/nexconn.ts` | Honest `unavailable` result — waiting on Console confirmation (§4.5) |
 | Translation selector | `src/server/translation/index.ts` | Working |
 | Webhook receiver | `src/app/api/webhooks/nexconn/route.ts` | Built — verify signature → dedupe by external id → ledger |
 | Webhook signature | `src/server/webhooks/signature.ts` | Built — reads `AppKey`/`Nonce`/`Timestamp`/`Signature` |
-| Token/config API | `src/app/api/rooms/[joinCode]/join/route.ts` | Built — returns App Key + user token, never the App Secret |
+| Student token/config API | `src/app/api/rooms/[joinCode]/join/route.ts` | Built — returns App Key + user token, never the App Secret |
+| Host live token API | `src/app/api/rooms/[joinCode]/chat-token/route.ts` | Built — owner-only, issues the host's own channel token |
+| Student room UI | `src/app/join/[code]/join-room-client.tsx` | Built — join, ask, upvote, live badge, polling |
+| Host room UI | `src/app/host/rooms/[joinCode]/host-room-client.tsx` | Built — moderation, answers, close room, live badge |
 
 The server adapters are protected with `import "server-only"` so they cannot be
 accidentally bundled into browser code. Two Node-level helpers
@@ -339,19 +356,22 @@ Health check: `http://localhost:3000/api/health` should return
 
 ## 10. Acceptance checklist mapped to phases
 
-| README / architecture requirement | Phase |
-|---|---|
-| Host creates a room and displays a working QR code | 1 |
-| Student joins from a phone browser without an app | 1–2 |
-| Backend issues Nexconn token; App Secret stays server-side | 2 |
-| Live question delivery through the Open Channel | 3 |
-| Persist room/question/answer history; restore on refresh | 4 |
-| Host sees translation; student sees translated answers | 5 |
-| Host approves / hides / rejects | 6 |
-| Multiple students vote; duplicate votes rejected | 7 |
-| Host answers; answers translated per student | 8 |
-| Closing a room blocks joins and submissions | 8 |
-| Webhook verification, idempotency, rate limits, tests | 9 |
+The nine original phases from `README.md` / `docs/architecture.md`. Status uses
+the task-brief vocabulary: `IMPLEMENTED`, `PARTIALLY_IMPLEMENTED`,
+`NOT_IMPLEMENTED`, `AUTOMATED_TESTED`, `LIVE_TESTED`, `BLOCKED`,
+`NEEDS_VERIFICATION`. A row can be both `IMPLEMENTED` and `AUTOMATED_TESTED`.
+
+| Phase | README / architecture requirement | Status | Evidence |
+|---|---|---|---|
+| 1 | Host auth, room creation, join code + QR, public room lookup | `IMPLEMENTED` | `src/server/auth/*`, `src/server/rooms/*`, `src/app/api/rooms/route.ts`, `/host` UI |
+| 2 | Student identity, room joining, participant persistence, token issuance | `IMPLEMENTED` + `AUTOMATED_TESTED` (join/token unit tests) + `LIVE_TESTED` (probe: token issue) | `src/app/api/rooms/[joinCode]/join/route.ts` |
+| 3 | Live question delivery through the Open Channel | `IMPLEMENTED` + `LIVE_TESTED` (probe: create/send/destroy) — browser relay `NEEDS_VERIFICATION` | `src/client/chat/nexconn.ts`, `src/client/chat/use-live-room.ts`, `src/app/join/[code]/join-room-client.tsx` |
+| 4 | Persist room/question/answer history; restore on refresh | `IMPLEMENTED` + `AUTOMATED_TESTED` (validation) | Prisma schema, `src/server/questions/service.ts`, polling in both room clients |
+| 5 | Host sees translation; student sees translated answers | `BLOCKED` (Console translation disabled) + `NEEDS_VERIFICATION` | `src/client/chat/nexconn.ts` translate path; passthrough fallback kept |
+| 6 | Host approves / hides / rejects | `IMPLEMENTED` | `src/app/api/questions/[questionId]/moderation/route.ts`, host UI |
+| 7 | Multiple students vote; duplicate votes rejected | `IMPLEMENTED` + `AUTOMATED_TESTED` (`DUPLICATE_VOTE` path) | `src/app/api/questions/[questionId]/votes/route.ts` |
+| 8 | Host answers; closed room blocks joins/submissions | `IMPLEMENTED` | `src/app/api/questions/[questionId]/answers/route.ts`, `src/app/api/rooms/[joinCode]/close/route.ts` |
+| 9 | Webhook verification, idempotency, rate limits, tests | `IMPLEMENTED` + `AUTOMATED_TESTED` (signing, webhook signature, rate limit, validation) — webhook delivery `BLOCKED` (needs public URL + Console registration) | `src/app/api/webhooks/nexconn/route.ts`, `src/server/webhooks/signature.ts` |
 
 ---
 
@@ -366,14 +386,17 @@ Health check: `http://localhost:3000/api/health` should return
   deployment.
 - The local SSE transport is a development convenience. It must not be
   presented as the production real-time layer.
-- The Nexconn chat wiring (server adapter, browser transport, join route,
-  webhook receiver) is built but **not live-tested** — the team has no Console
-  access. See the open items listed in §4 and in
-  `docs/nexconn-integration-contract.md`.
-- The browser transport is not yet mounted in a student/host room page; the
-  live room UI is part of Phases 2–8.
-- Translation quality and language coverage are unverified until the team lead
-  enables Nexconn translation and supplies the language mapping.
+- The Nexconn server chat adapter was **live-probed** on 2026-11-12 against the
+  account's Singapore host (token issue, channel create + `channelId` length,
+  message send as `vaaniSystem`, destroy — all `code: 0`; see
+  `docs/nexconn-integration-contract.md` §I). The **browser end-to-end smoke
+  test is still pending**: it needs Console access, a public HTTPS
+  `APP_BASE_URL`, and two browser sessions.
+- The browser transport is now mounted in the student and host room pages via
+  `src/client/chat/use-live-room.ts`; when the Nexconn credentials/providers are
+  absent the pages fall back to polling.
+- Translation is still disabled by default and its language coverage is
+  unverified; the `passthrough` provider keeps working as an honest fallback.
 
 ---
 
