@@ -20,14 +20,18 @@ import {
 } from "@/lib/domain";
 import { formatDateTime } from "@/lib/format";
 import type { JoinedRoom, QuestionSummary } from "@/lib/room/types";
+import {
+  TRANSLATION_MAX_TEXT_BYTES,
+  utf8ByteLength,
+} from "@/lib/translation/limits";
 
 const POLL_INTERVAL_MS = 6000;
 
 /**
- * Matches `translateRequestSchema`. Text above this length is rejected at the
- * edge, so the control tells the user instead of firing a doomed request.
+ * Matches `translateRequestSchema`, which counts UTF-8 bytes rather than
+ * characters. Text above this limit is rejected at the edge, so the control
+ * tells the user instead of firing a doomed request.
  */
-const TRANSLATION_TEXT_LIMIT = 500;
 
 type TranslationState =
   | { status: "loading"; targetLanguage: LanguageCode }
@@ -280,6 +284,10 @@ export function JoinRoomClient({
               : item,
           ),
         );
+      } else {
+        // The server had no vote to remove, so the optimistic decrement was
+        // wrong. Re-read the board instead of showing a count that drifts.
+        void refresh();
       }
     } catch (voteError) {
       setQuestions((current) =>
@@ -311,13 +319,13 @@ export function JoinRoomClient({
     text: string,
     sourceLanguage: string,
   ) {
-    if (text.length > TRANSLATION_TEXT_LIMIT) {
+    if (utf8ByteLength(text) > TRANSLATION_MAX_TEXT_BYTES) {
       setTranslations((current) => ({
         ...current,
         [key]: {
           status: "error",
           targetLanguage: translationTarget,
-          message: `This text is longer than ${TRANSLATION_TEXT_LIMIT} characters, so it cannot be translated.`,
+          message: `This text is too long to translate. The service accepts at most ${TRANSLATION_MAX_TEXT_BYTES} bytes per request.`,
         },
       }));
       return;

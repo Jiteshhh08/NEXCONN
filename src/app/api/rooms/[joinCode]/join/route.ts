@@ -62,36 +62,35 @@ export async function POST(
 
     const session = await getSessionUser();
 
-    let userId: string;
-    let displayName: string | null;
-    let createdGuestSession = false;
-
-    if (session) {
-      userId = session.id;
-      displayName = session.displayName ?? input.displayName ?? null;
-    } else {
-      const guest = await prisma.user.create({
-        data: {
-          displayName: input.displayName ?? null,
-          preferredLanguage: input.preferredLanguage,
-          role: "student",
-          isGuest: true,
-        },
-        select: { id: true, displayName: true },
-      });
-
-      userId = guest.id;
-      displayName = guest.displayName;
-      createdGuestSession = true;
-    }
-
-    await prisma.$transaction(async (tx) => {
+    // Resolve the identity and join the room in one transaction. A guest user
+    // must not be created (and then orphaned) if the room closes between the
+    // read above and the participant write below.
+    const identity = await prisma.$transaction(async (tx) => {
       await assertOpenRoomForWrite(tx, room.id);
+
+      const user = session
+        ? {
+            id: session.id,
+            displayName: session.displayName ?? input.displayName ?? null,
+            created: false,
+          }
+        : await tx.user
+            .create({
+              data: {
+                displayName: input.displayName ?? null,
+                preferredLanguage: input.preferredLanguage,
+                role: "student",
+                isGuest: true,
+              },
+              select: { id: true, displayName: true },
+            })
+            .then((guest) => ({ ...guest, created: true }));
+
       await tx.participant.upsert({
-        where: { roomId_userId: { roomId: room.id, userId } },
+        where: { roomId_userId: { roomId: room.id, userId: user.id } },
         create: {
           roomId: room.id,
-          userId,
+          userId: user.id,
           preferredLanguage: input.preferredLanguage,
           isAnonymous: input.isAnonymous,
         },
@@ -101,21 +100,26 @@ export async function POST(
           isAnonymous: input.isAnonymous,
         },
       });
+
+      return user;
     });
+
+    // Establish the browser session *before* calling Nexconn. If token
+    // issuance fails, the retry can reuse this identity instead of creating a
+    // second guest user and inflating the participant count.
+    if (identity.created) {
+      const sessionRecord = await createSession(identity.id);
+      await setSessionCookie(sessionRecord.token, sessionRecord.expiresAt);
+    }
 
     const joined = await buildJoinedRoom({
       room,
-      userId,
+      userId: identity.id,
       role: "student",
-      displayName,
+      displayName: identity.displayName,
       preferredLanguage: input.preferredLanguage,
       isAnonymous: input.isAnonymous,
     });
-
-    if (createdGuestSession) {
-      const sessionRecord = await createSession(userId);
-      await setSessionCookie(sessionRecord.token, sessionRecord.expiresAt);
-    }
 
     return apiSuccess(joined, { status: 201 });
   } catch (error) {

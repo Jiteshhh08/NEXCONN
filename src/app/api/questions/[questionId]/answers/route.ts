@@ -1,7 +1,8 @@
-import { roomClosed } from "@/lib/api/errors";
+import { AppError, roomClosed } from "@/lib/api/errors";
 import { assertSameOrigin } from "@/lib/api/request";
 import { apiError, apiSuccess, parseJson } from "@/lib/api/response";
 import { createAnswerSchema } from "@/lib/validation";
+import { checkRateLimit } from "@/server/auth/rate-limit";
 import { createAnswer } from "@/server/questions/service";
 import {
   loadQuestionContext,
@@ -24,6 +25,17 @@ export async function POST(
     if (room.status === "closed") throw roomClosed();
 
     const host = await requireRoomOwner(room);
+
+    const limit = checkRateLimit(`answer:${host.id}`, 30, 60 * 1000);
+    if (!limit.allowed) {
+      throw new AppError(
+        "RATE_LIMITED",
+        "You are publishing answers very quickly. Please wait a moment and try again.",
+        429,
+        { retryAfterSeconds: limit.retryAfterSeconds },
+      );
+    }
+
     const input = await parseJson(request, createAnswerSchema);
     const answer = await createAnswer(room, questionId, host.id, input);
 

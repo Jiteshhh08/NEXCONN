@@ -288,6 +288,28 @@ describe("translateRequestSchema", () => {
     );
   });
 
+  it("applies the limit in UTF-8 bytes, not characters", () => {
+    // 300 Devanagari characters are 900 bytes: under the old character-based
+    // limit they passed validation and then failed inside the provider.
+    assert.equal(
+      translateRequestSchema.safeParse({
+        text: "स".repeat(300),
+        sourceLanguage: "mr",
+        targetLanguage: "hi",
+      }).success,
+      false,
+    );
+
+    assert.equal(
+      translateRequestSchema.safeParse({
+        text: "स".repeat(160),
+        sourceLanguage: "mr",
+        targetLanguage: "hi",
+      }).success,
+      true,
+    );
+  });
+
   it("rejects an unsupported target language", () => {
     assert.equal(
       translateRequestSchema.safeParse({

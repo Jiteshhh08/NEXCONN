@@ -1,6 +1,7 @@
 import type { LanguageCode } from "@/lib/domain";
 
 import type { TranslationProviderName, TranslationResult } from "./contracts";
+import { TRANSLATION_MAX_TEXT_BYTES } from "./limits";
 
 /**
  * MyMemory translation adapter (pure logic, no `server-only`).
@@ -22,7 +23,7 @@ import type { TranslationProviderName, TranslationResult } from "./contracts";
 export const MYMEMORY_ENDPOINT = "https://api.mymemory.translated.net/get";
 
 /** Documented limit for the `q` query parameter. */
-export const MYMEMORY_MAX_QUERY_BYTES = 500;
+export const MYMEMORY_MAX_QUERY_BYTES = TRANSLATION_MAX_TEXT_BYTES;
 
 export interface MyMemoryTranslationRequest {
   messageId: string;

@@ -205,14 +205,28 @@ export async function listQuestions(
   if (options.cursor) {
     const anchor = await prisma.question.findUnique({
       where: { id: options.cursor },
-      select: { createdAt: true },
+      select: { id: true, roomId: true, createdAt: true },
     });
-    if (anchor) where.createdAt = { lt: anchor.createdAt };
+
+    // A cursor from another room must not influence this room's ordering.
+    if (anchor && anchor.roomId === room.id) {
+      // `createdAt` alone is not unique: two questions submitted in the same
+      // millisecond would otherwise both be skipped or returned twice. The id
+      // is the deterministic tie-breaker, matching the compound ordering below.
+      where.AND = [
+        {
+          OR: [
+            { createdAt: { lt: anchor.createdAt } },
+            { createdAt: anchor.createdAt, id: { lt: anchor.id } },
+          ],
+        },
+      ];
+    }
   }
 
   const rows = await prisma.question.findMany({
     where,
-    orderBy: { createdAt: "desc" },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     take: options.limit,
     select: questionSelect,
   });

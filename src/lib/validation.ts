@@ -4,6 +4,10 @@ import {
   HOST_MODERATION_ACTIONS,
   LANGUAGE_CODES,
 } from "@/lib/domain";
+import {
+  TRANSLATION_MAX_TEXT_BYTES,
+  utf8ByteLength,
+} from "@/lib/translation/limits";
 
 const languageCodeSchema = z.enum(LANGUAGE_CODES);
 
@@ -109,13 +113,22 @@ export const historyQuerySchema = z
 export type HistoryQuery = z.infer<typeof historyQuerySchema>;
 
 /**
- * Translation input. The upper bound matches the free translation provider's
- * documented 500-byte query limit, so oversized text is rejected at the edge
- * with a clear message instead of failing inside the provider.
+ * Translation input. The upper bound matches the providers' documented
+ * 500-*byte* query limit, so oversized text is rejected at the edge with a
+ * clear message instead of failing inside the provider. Counting bytes rather
+ * than characters matters for Devanagari scripts, where one character can take
+ * three bytes.
  */
 export const translateRequestSchema = z
   .object({
-    text: trimmedString(1, 500, "Text"),
+    text: z
+      .string()
+      .trim()
+      .min(1, "Text must be at least 1 character.")
+      .refine(
+        (value) => utf8ByteLength(value) <= TRANSLATION_MAX_TEXT_BYTES,
+        `Text is too long. This translation service accepts at most ${TRANSLATION_MAX_TEXT_BYTES} bytes per request.`,
+      ),
     sourceLanguage: languageCodeSchema,
     targetLanguage: languageCodeSchema,
   })

@@ -31,6 +31,8 @@ export async function POST(request: Request) {
       throw new AppError(
         "RATE_LIMITED",
         "You are translating very quickly. Please wait a moment and try again.",
+        429,
+        { retryAfterSeconds: limit.retryAfterSeconds },
       );
     }
 
