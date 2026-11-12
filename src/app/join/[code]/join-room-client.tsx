@@ -23,9 +23,59 @@ import type { JoinedRoom, QuestionSummary } from "@/lib/room/types";
 
 const POLL_INTERVAL_MS = 6000;
 
+/**
+ * Matches `translateRequestSchema`. Text above this length is rejected at the
+ * edge, so the control tells the user instead of firing a doomed request.
+ */
+const TRANSLATION_TEXT_LIMIT = 500;
+
+type TranslationState =
+  | { status: "loading"; targetLanguage: LanguageCode }
+  | {
+      status: "done";
+      targetLanguage: LanguageCode;
+      text: string;
+      provider: string;
+    }
+  | { status: "error"; targetLanguage: LanguageCode; message: string };
+
 function messageFor(error: unknown): string {
   if (error instanceof ApiRequestError) return error.message;
   return "Something went wrong. Please try again.";
+}
+
+/**
+ * Renders the outcome of a translation request. A `loading` state renders
+ * nothing here because the button that started it already shows a spinner.
+ * A failure is always stated explicitly — the original text is never
+ * presented as though it were a translation.
+ */
+function TranslatedText({ state }: { state: TranslationState | undefined }) {
+  if (!state || state.status === "loading") return null;
+
+  if (state.status === "error") {
+    return <p className="mt-2 text-xs font-medium text-danger">{state.message}</p>;
+  }
+
+  const language = getLanguage(state.targetLanguage);
+
+  return (
+    <div className="mt-2 rounded-xl border border-primary/20 bg-primary/5 p-3">
+      <p className="text-xs font-semibold text-primary-strong">
+        Translated to {language.label}
+        <span className="ml-1 font-normal text-muted-foreground">
+          via {state.provider}
+        </span>
+      </p>
+      <p
+        lang={state.targetLanguage}
+        dir={language.direction}
+        className="mt-1 whitespace-pre-wrap text-sm leading-6 text-foreground"
+      >
+        {state.text}
+      </p>
+    </div>
+  );
 }
 
 /**
@@ -45,6 +95,7 @@ export function JoinRoomClient({
   hostLanguage: string;
 }) {
   const [joined, setJoined] = useState<JoinedRoom | null>(null);
+  const [restoring, setRestoring] = useState(true);
   const [questions, setQuestions] = useState<QuestionSummary[]>([]);
   const [displayName, setDisplayName] = useState("");
   const [preferredLanguage, setPreferredLanguage] =
@@ -56,6 +107,12 @@ export function JoinRoomClient({
   const [votingId, setVotingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [translationTarget, setTranslationTarget] = useState<LanguageCode>(
+    hostLanguage as LanguageCode,
+  );
+  const [translations, setTranslations] = useState<
+    Record<string, TranslationState>
+  >({});
 
   const refresh = useCallback(async () => {
     try {
@@ -66,6 +123,41 @@ export function JoinRoomClient({
     } catch {
       // Transient failures are retried by the next poll.
     }
+  }, [joinCode]);
+
+  /**
+   * A reload must not push the student back to the join form. The session
+   * cookie survives the refresh, so ask the server whether this browser is
+   * already a participant of the room and restore that identity instead of
+   * joining again (which would be a pointless write, never a new participant).
+   */
+  useEffect(() => {
+    let active = true;
+
+    void (async () => {
+      try {
+        const data = await apiFetch<JoinedRoom>(
+          `/api/rooms/${joinCode}/session`,
+        );
+        if (!active) return;
+        setJoined(data);
+        setAskAnonymous(data.participant.isAnonymous);
+        setPreferredLanguage(
+          data.participant.preferredLanguage as LanguageCode,
+        );
+        setTranslationTarget(
+          data.participant.preferredLanguage as LanguageCode,
+        );
+      } catch {
+        // Not a participant yet (or the session expired) — show the join form.
+      } finally {
+        if (active) setRestoring(false);
+      }
+    })();
+
+    return () => {
+      active = false;
+    };
   }, [joinCode]);
 
   useEffect(() => {
@@ -110,6 +202,8 @@ export function JoinRoomClient({
       });
       setJoined(data);
       setAskAnonymous(data.participant.isAnonymous);
+      setPreferredLanguage(data.participant.preferredLanguage as LanguageCode);
+      setTranslationTarget(data.participant.preferredLanguage as LanguageCode);
     } catch (joinError) {
       setError(messageFor(joinError));
     } finally {
@@ -205,6 +299,80 @@ export function JoinRoomClient({
     }
   }
 
+  /**
+   * Translates one piece of room text into the viewer's chosen language.
+   *
+   * `/api/translate` only answers 200 when the configured provider returned a
+   * real translation, so a failure is surfaced as an error message instead of
+   * quietly showing the original text as if it had been translated.
+   */
+  async function handleTranslate(
+    key: string,
+    text: string,
+    sourceLanguage: string,
+  ) {
+    if (text.length > TRANSLATION_TEXT_LIMIT) {
+      setTranslations((current) => ({
+        ...current,
+        [key]: {
+          status: "error",
+          targetLanguage: translationTarget,
+          message: `This text is longer than ${TRANSLATION_TEXT_LIMIT} characters, so it cannot be translated.`,
+        },
+      }));
+      return;
+    }
+
+    setTranslations((current) => ({
+      ...current,
+      [key]: { status: "loading", targetLanguage: translationTarget },
+    }));
+
+    try {
+      const data = await apiFetch<{
+        translation: { translatedText: string; provider: string };
+      }>("/api/translate", {
+        method: "POST",
+        body: JSON.stringify({
+          text,
+          sourceLanguage,
+          targetLanguage: translationTarget,
+        }),
+      });
+      setTranslations((current) => ({
+        ...current,
+        [key]: {
+          status: "done",
+          targetLanguage: translationTarget,
+          text: data.translation.translatedText,
+          provider: data.translation.provider,
+        },
+      }));
+    } catch (translateError) {
+      setTranslations((current) => ({
+        ...current,
+        [key]: {
+          status: "error",
+          targetLanguage: translationTarget,
+          message: messageFor(translateError),
+        },
+      }));
+    }
+  }
+
+  if (restoring) {
+    return (
+      <Card className="p-6 sm:p-8">
+        <h2 className="font-display text-2xl font-semibold tracking-[-0.025em]">
+          Reconnecting you to this room
+        </h2>
+        <p className="mt-2 text-sm leading-6 text-muted-foreground">
+          Checking whether you are already taking part in this room…
+        </p>
+      </Card>
+    );
+  }
+
   if (!joined) {
     return (
       <Card className="p-6 sm:p-8">
@@ -293,6 +461,8 @@ export function JoinRoomClient({
           ? "Offline"
           : "Polling";
 
+  const targetLanguage = getLanguage(translationTarget);
+
   return (
     <div className="space-y-6">
       <Card className="p-6 sm:p-8">
@@ -361,13 +531,38 @@ export function JoinRoomClient({
       </Card>
 
       <Card className="p-6 sm:p-8">
-        <div className="flex items-center justify-between gap-3">
-          <h2 className="font-display text-xl font-semibold tracking-[-0.02em]">
-            Room board
-          </h2>
-          <span className="text-xs font-medium text-muted-foreground">
-            {questions.length} {questions.length === 1 ? "question" : "questions"}
-          </span>
+        <div className="flex flex-wrap items-end justify-between gap-4">
+          <div>
+            <h2 className="font-display text-xl font-semibold tracking-[-0.02em]">
+              Room board
+            </h2>
+            <p className="mt-1 text-xs font-medium text-muted-foreground">
+              {questions.length}{" "}
+              {questions.length === 1 ? "question" : "questions"}
+            </p>
+          </div>
+          <div className="w-full sm:w-60">
+            <Field
+              label="Translate into"
+              htmlFor="translationTarget"
+              hint="Translations are produced by the provider configured on the server."
+            >
+              <Select
+                id="translationTarget"
+                name="translationTarget"
+                value={translationTarget}
+                onChange={(event) =>
+                  setTranslationTarget(event.target.value as LanguageCode)
+                }
+              >
+                {LANGUAGES.map((language) => (
+                  <option key={language.code} value={language.code}>
+                    {language.label} ({language.nativeLabel})
+                  </option>
+                ))}
+              </Select>
+            </Field>
+          </div>
         </div>
 
         <div className="mt-5 space-y-3">
@@ -382,6 +577,9 @@ export function JoinRoomClient({
               const isOwn =
                 joined.participant.userId === question.askedByUserId;
               const canVote = question.moderationStatus === "approved";
+              const questionTranslation = translations[question.id];
+              const answerKey = `${question.id}:answer`;
+              const answerTranslation = translations[answerKey];
 
               return (
                 <article
@@ -418,6 +616,35 @@ export function JoinRoomClient({
                     {question.originalText}
                   </p>
 
+                  {question.sourceLanguage !== translationTarget ? (
+                    <div className="mt-2">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        disabled={questionTranslation?.status === "loading"}
+                        onClick={() =>
+                          void handleTranslate(
+                            question.id,
+                            question.originalText,
+                            question.sourceLanguage,
+                          )
+                        }
+                      >
+                        {questionTranslation?.status === "loading" ? (
+                          <Loader2
+                            aria-hidden="true"
+                            className="size-4 animate-spin"
+                          />
+                        ) : (
+                          <Languages aria-hidden="true" className="size-4" />
+                        )}
+                        Translate to {targetLanguage.label}
+                      </Button>
+                    </div>
+                  ) : null}
+
+                  <TranslatedText state={questionTranslation} />
+
                   {question.answer ? (
                     <div className="mt-3 rounded-xl border border-success/25 bg-success/5 p-3">
                       <p className="text-xs font-semibold text-success">
@@ -430,6 +657,31 @@ export function JoinRoomClient({
                       >
                         {question.answer.answerText}
                       </p>
+                      {question.answer.answerLanguage !== translationTarget ? (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          disabled={answerTranslation?.status === "loading"}
+                          onClick={() =>
+                            void handleTranslate(
+                              answerKey,
+                              question.answer!.answerText,
+                              question.answer!.answerLanguage,
+                            )
+                          }
+                        >
+                          {answerTranslation?.status === "loading" ? (
+                            <Loader2
+                              aria-hidden="true"
+                              className="size-4 animate-spin"
+                            />
+                          ) : (
+                            <Languages aria-hidden="true" className="size-4" />
+                          )}
+                          Translate answer
+                        </Button>
+                      ) : null}
+                      <TranslatedText state={answerTranslation} />
                     </div>
                   ) : null}
 

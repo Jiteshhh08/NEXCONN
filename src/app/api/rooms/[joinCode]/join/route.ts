@@ -9,7 +9,7 @@ import {
   getSessionUser,
   setSessionCookie,
 } from "@/server/auth/session";
-import { getChatProvider } from "@/server/chat";
+import { buildJoinedRoom } from "@/server/rooms/joined";
 import { getPublicRoomByCode } from "@/server/rooms/service";
 
 export const runtime = "nodejs";
@@ -90,11 +90,13 @@ export async function POST(
       update: { isActive: true },
     });
 
-    const chat = await getChatProvider().issueUserToken({
+    const joined = await buildJoinedRoom({
+      room,
       userId,
-      roomId: room.id,
       role: "student",
-      displayName: input.isAnonymous ? null : displayName,
+      displayName,
+      preferredLanguage: input.preferredLanguage,
+      isAnonymous: input.isAnonymous,
     });
 
     if (createdGuestSession) {
@@ -102,28 +104,7 @@ export async function POST(
       await setSessionCookie(sessionRecord.token, sessionRecord.expiresAt);
     }
 
-    const safeDisplayName = input.isAnonymous ? null : displayName;
-
-    return apiSuccess(
-      {
-        room: {
-          id: room.id,
-          title: room.title,
-          joinCode: room.joinCode,
-          status: room.status,
-          hostLanguage: room.hostLanguage,
-          hostName: room.hostName,
-        },
-        participant: {
-          userId,
-          displayName: safeDisplayName,
-          preferredLanguage: input.preferredLanguage,
-          isAnonymous: input.isAnonymous,
-        },
-        chat,
-      },
-      { status: 201 },
-    );
+    return apiSuccess(joined, { status: 201 });
   } catch (error) {
     return apiError(error);
   }

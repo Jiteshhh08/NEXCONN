@@ -8,6 +8,15 @@ import type { ChatConnectionConfig, LiveEvent } from "@/lib/chat/contracts";
 export type LiveStatus = "idle" | "connecting" | "live" | "error";
 
 /**
+ * Backoff between connection attempts. The initial attempt is followed by
+ * three retries, after which the hook settles on `error` and the caller keeps
+ * working through polling. Retrying a bounded number of times avoids both a
+ * permanently "Offline" room after one transient failure and an endless
+ * reconnect loop that would churn the SDK.
+ */
+const CONNECT_RETRY_DELAYS_MS = [1_000, 3_000, 7_000] as const;
+
+/**
  * Connects the browser to the room's live channel and forwards decoded events
  * to `onEvent`.
  *
@@ -51,37 +60,71 @@ export function useLiveRoom(
       return;
     }
 
+    // One transport and one listener registration for the whole effect, so
+    // retries can never double up on events.
     const transport = new NexconnChatTransport();
     const unsubscribe = transport.onEvent((event) => onEventRef.current(event));
     let cancelled = false;
+    let cancelSleep: (() => void) | null = null;
+
+    const sleep = (delayMs: number) =>
+      new Promise<void>((resolve) => {
+        const timer = window.setTimeout(() => {
+          cancelSleep = null;
+          resolve();
+        }, delayMs);
+
+        cancelSleep = () => {
+          window.clearTimeout(timer);
+          cancelSleep = null;
+          resolve();
+        };
+      });
 
     void (async () => {
-      try {
-        await transport.connect({
-          appKey,
-          token,
-          userId,
-          channelId,
-          roomId,
-          provider,
-        });
-        await transport.joinChannel();
+      let lastMessage = "The live connection could not be established.";
+
+      for (
+        let attempt = 0;
+        attempt <= CONNECT_RETRY_DELAYS_MS.length;
+        attempt += 1
+      ) {
         if (cancelled) return;
-        setError(null);
-        setStatus("live");
-      } catch (connectError) {
-        if (cancelled) return;
-        setStatus("error");
-        setError(
-          connectError instanceof Error
-            ? connectError.message
-            : "The live connection could not be established.",
-        );
+
+        try {
+          await transport.connect({
+            appKey,
+            token,
+            userId,
+            channelId,
+            roomId,
+            provider,
+          });
+          await transport.joinChannel();
+          if (cancelled) return;
+          setError(null);
+          setStatus("live");
+          return;
+        } catch (connectError) {
+          lastMessage =
+            connectError instanceof Error
+              ? connectError.message
+              : lastMessage;
+        }
+
+        const delay = CONNECT_RETRY_DELAYS_MS[attempt];
+        if (delay === undefined) break;
+        await sleep(delay);
       }
+
+      if (cancelled) return;
+      setStatus("error");
+      setError(lastMessage);
     })();
 
     return () => {
       cancelled = true;
+      cancelSleep?.();
       unsubscribe();
       transport.disconnect();
     };

@@ -108,6 +108,21 @@ export const historyQuerySchema = z
 
 export type HistoryQuery = z.infer<typeof historyQuerySchema>;
 
+/**
+ * Translation input. The upper bound matches the free translation provider's
+ * documented 500-byte query limit, so oversized text is rejected at the edge
+ * with a clear message instead of failing inside the provider.
+ */
+export const translateRequestSchema = z
+  .object({
+    text: trimmedString(1, 500, "Text"),
+    sourceLanguage: languageCodeSchema,
+    targetLanguage: languageCodeSchema,
+  })
+  .strict();
+
+export type TranslateRequestInput = z.infer<typeof translateRequestSchema>;
+
 export const joinCodeSchema = z
   .string()
   .trim()

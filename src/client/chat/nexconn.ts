@@ -61,6 +61,7 @@ export class NexconnChatTransport implements ChatClientTransport {
   private channel: OpenChannel | null = null;
   private readonly listeners = new Set<(event: LiveEvent) => void>();
   private initialized = false;
+  private handlersRegistered = false;
 
   async connect(config: ChatConnectionConfig): Promise<void> {
     this.config = config;
@@ -175,6 +176,11 @@ export class NexconnChatTransport implements ChatClientTransport {
   }
 
   private registerHandlers(): void {
+    // `connect()` may be retried after a failure, so registration must be
+    // idempotent: a second handler with the same id could deliver every
+    // message twice.
+    if (this.handlersRegistered) return;
+
     NCEngine.addMessageHandler(
       MESSAGE_HANDLER_ID,
       new MessageHandler({
@@ -188,6 +194,8 @@ export class NexconnChatTransport implements ChatClientTransport {
         onTranslationCompleted: (event) => this.handleTranslations(event),
       }),
     );
+
+    this.handlersRegistered = true;
   }
 
   private handleMessages(messages: Message[]): void {

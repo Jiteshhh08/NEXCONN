@@ -37,6 +37,11 @@ export async function apiFetch<T>(
   init?: RequestInit,
 ): Promise<T> {
   const response = await fetch(path, {
+    // The room board polls this endpoint for new answers, questions and votes.
+    // HTTP caching would hand the poll a stale body while the database already
+    // holds the new row, so the browser must always revalidate. Callers can
+    // still override this by passing their own `cache` option.
+    cache: "no-store",
     ...init,
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },

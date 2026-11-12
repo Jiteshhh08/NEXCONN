@@ -41,8 +41,9 @@
 | Session/token issuance route (`POST /api/rooms/[joinCode]/join`) | ✅ Built — token issue live-probed |
 | Nexconn webhook receiver (verify → dedupe → ledger) | ✅ Built — not live-tested (needs a public URL) |
 | Nexconn built-in translation adapter | ⏳ Stubbed (`unavailable`) — needs Console confirmation (§4.5) |
+| Key-free translation (`mymemory` provider + `POST /api/translate` + student control) | ✅ Built — automated tests only; provider reachability live-probed, GUI **not** verified (§4.5) |
 | Student & host live room UI (join, ask, vote, moderate, answer, close) | ✅ Built — mounted at `/join/[code]` and `/host/rooms/[joinCode]` |
-| Test suite and production hardening | ✅ 51 tests passing; hardening ongoing (§7) |
+| Test suite and production hardening | ✅ 76 tests passing (14 suites, 0 fail); hardening ongoing (§7) |
 
 The application is deliberately runnable **without** Nexconn credentials:
 
@@ -50,6 +51,8 @@ The application is deliberately runnable **without** Nexconn credentials:
   an SSE development transport.
 - `TRANSLATION_PROVIDER="passthrough"` never fabricates a translation. It
   returns `unavailable` and the UI keeps showing the original text.
+- `TRANSLATION_PROVIDER="mymemory"` enables real translation with **no API
+  key** (see §4.5).
 
 These are development scaffolding, **not** a replacement for Nexconn in the
 submitted product.
@@ -89,9 +92,12 @@ Copy `.env.example` to `.env`. **Never commit `.env`.**
 | `NEXCONN_APP_SECRET` | **Server only** | Privileged Nexconn API calls **and webhook signature verification** | **YES — never expose** |
 | `NEXCONN_API_BASE_URL` | Server | Nexconn server API base URL / region | No |
 | `NEXCONN_CHAT_PROVIDER` | Server | `local` (dev) or `nexconn` | No |
-| `TRANSLATION_PROVIDER` | Server | `passthrough`, `nexconn`, or `libretranslate` | No |
+| `TRANSLATION_PROVIDER` | Server | `passthrough` (default, dev/test), `mymemory`, `nexconn`, or `libretranslate` | No |
+| `MYMEMORY_EMAIL` | Server | Optional contact address for the MyMemory provider (raises its anonymous daily quota). Not required. | No |
 | `LIBRETRANSLATE_URL` | Server | Optional local/demo translation | No |
 | `LIBRETRANSLATE_API_KEY` | Server | Optional LibreTranslate auth | **Yes** |
+| `TRANSLATION_ENABLED` | **Unused** | Nothing reads it; the translate route is always available | No |
+| `NEXCONN_WEBHOOK_SECRET` | **Unused** | Nothing reads it; webhooks are verified with `NEXCONN_APP_SECRET` | **Yes** |
 
 Rules:
 
@@ -101,7 +107,9 @@ Rules:
   Nonce + Timestamp)`); there is no separate webhook secret.
   `NEXCONN_WEBHOOK_SECRET` is **not** part of the Nexconn contract — it is left
   blank in `.env.example` only for deployments that may add one later, and the
-  webhook receiver does not read it.
+  webhook receiver does not read it (verified: the receiver reads
+  `NEXCONN_APP_SECRET`). `TRANSLATION_ENABLED` is likewise declared but never
+  consumed; both are kept only so existing `.env` files stay valid.
 - If a secret is ever pasted into chat, committed, or shared, rotate it in the
   Nexconn Console immediately.
 - Use separate Nexconn applications/credentials for development and production.
@@ -189,8 +197,34 @@ the Nexconn event id. Still to confirm:
 
 ### 4.5 Translation
 
-Built-in translation is **disabled by default** in the current Nexconn docs.
-The team lead must confirm it is enabled in the Console.
+**Decision taken (2026-11-12):** the product now has a **working, key-free**
+translation path so it does not depend on a Nexconn Console change:
+
+- Provider order considered: (1) Nexconn built-in translation, (2) a legitimate
+  key-free service, (3) LibreTranslate/another external provider.
+- (1) was rejected as a **server-side** option: Nexconn's translation module is
+  browser-SDK only (`@nexconn/chat`), and server-side translation is not
+  documented, so `src/server/translation/nexconn.ts` stays an honest
+  `unavailable`.
+- (3) was rejected after a live probe: `translate.terraprint.co` returned
+  **502** and `libretranslate.com` returned **400**, so no public instance is
+  usable.
+- (2) was chosen: the public **MyMemory** API answered `200` with a real
+  Hindi translation for `en|hi` and requires **no API key**. It is implemented
+  as `TRANSLATION_PROVIDER="mymemory"`.
+- `TRANSLATION_PROVIDER="passthrough"` remains the **default** and is a
+  **development/test mode**: it never fabricates a translation.
+- No paid service was enabled and no billing was changed. `MYMEMORY_EMAIL` is
+  optional and only raises the free anonymous quota.
+
+To turn it on locally: set `TRANSLATION_PROVIDER="mymemory"` in `.env` and
+restart the dev server. `POST /api/translate` returns `502
+TRANSLATION_UNAVAILABLE` (never the original text) whenever the provider cannot
+translate.
+
+Still open with the team lead — built-in translation is **disabled by default**
+in the current Nexconn docs, and the Console must confirm it is enabled if the
+Nexconn path is ever wanted.
 
 - [ ] Translation enabled for the application
 - [ ] Nexconn language code format (ISO 639-1 vs provider-specific)
@@ -248,13 +282,17 @@ Verify each step against the Console version the team actually has.
 | Chat provider selector | `src/server/chat/index.ts` | Working (`local`/`nexconn`) |
 | Browser chat transport | `src/client/chat/nexconn.ts` | Built — wraps `@nexconn/chat` behind `ChatClientTransport`, mounted via `src/client/chat/use-live-room.ts` in the student and host room pages |
 | Live-event wire format | `src/lib/chat/events.ts` | Built — structured events encoded into text messages |
-| Translation adapter | `src/server/translation/nexconn.ts` | Honest `unavailable` result — waiting on Console confirmation (§4.5) |
-| Translation selector | `src/server/translation/index.ts` | Working |
+| Translation adapter (Nexconn, browser-SDK only) | `src/server/translation/nexconn.ts` | Honest `unavailable` result — waiting on Console confirmation (§4.5) |
+| Translation adapter (key-free) | `src/server/translation/mymemory.ts` + `src/lib/translation/mymemory.ts` | Built — public MyMemory API, no key; unit-tested failure paths |
+| Translation request API | `src/app/api/translate/route.ts` | Built — auth + rate limit; `502 TRANSLATION_UNAVAILABLE` instead of faking a translation |
+| Translation selector | `src/server/translation/index.ts` | Working (`passthrough`/`nexconn`/`libretranslate`/`mymemory`) |
 | Webhook receiver | `src/app/api/webhooks/nexconn/route.ts` | Built — verify signature → dedupe by external id → ledger |
 | Webhook signature | `src/server/webhooks/signature.ts` | Built — reads `AppKey`/`Nonce`/`Timestamp`/`Signature` |
 | Student token/config API | `src/app/api/rooms/[joinCode]/join/route.ts` | Built — returns App Key + user token, never the App Secret |
+| Student session restore API | `src/app/api/rooms/[joinCode]/session/route.ts` | Built — refresh keeps the participant (same id, no duplicate row); 401 anonymous / 403 non-participant |
+| Shared join/session builder | `src/server/rooms/joined.ts` | Built — one payload for join and restore |
 | Host live token API | `src/app/api/rooms/[joinCode]/chat-token/route.ts` | Built — owner-only, issues the host's own channel token |
-| Student room UI | `src/app/join/[code]/join-room-client.tsx` | Built — join, ask, upvote, live badge, polling |
+| Student room UI | `src/app/join/[code]/join-room-client.tsx` | Built — restores the session on load, ask, upvote, live badge, polling, translate control (target-language select + per-question/answer translate) |
 | Host room UI | `src/app/host/rooms/[joinCode]/host-room-client.tsx` | Built — moderation, answers, close room, live badge |
 
 The server adapters are protected with `import "server-only"` so they cannot be
@@ -364,10 +402,10 @@ the task-brief vocabulary: `IMPLEMENTED`, `PARTIALLY_IMPLEMENTED`,
 | Phase | README / architecture requirement | Status | Evidence |
 |---|---|---|---|
 | 1 | Host auth, room creation, join code + QR, public room lookup | `IMPLEMENTED` | `src/server/auth/*`, `src/server/rooms/*`, `src/app/api/rooms/route.ts`, `/host` UI |
-| 2 | Student identity, room joining, participant persistence, token issuance | `IMPLEMENTED` + `AUTOMATED_TESTED` (join/token unit tests) + `LIVE_TESTED` (probe: token issue) | `src/app/api/rooms/[joinCode]/join/route.ts` |
-| 3 | Live question delivery through the Open Channel | `IMPLEMENTED` + `LIVE_TESTED` (probe: create/send/destroy) — browser relay `NEEDS_VERIFICATION` | `src/client/chat/nexconn.ts`, `src/client/chat/use-live-room.ts`, `src/app/join/[code]/join-room-client.tsx` |
-| 4 | Persist room/question/answer history; restore on refresh | `IMPLEMENTED` + `AUTOMATED_TESTED` (validation) | Prisma schema, `src/server/questions/service.ts`, polling in both room clients |
-| 5 | Host sees translation; student sees translated answers | `BLOCKED` (Console translation disabled) + `NEEDS_VERIFICATION` | `src/client/chat/nexconn.ts` translate path; passthrough fallback kept |
+| 2 | Student identity, room joining, participant persistence, token issuance | `IMPLEMENTED` + `AUTOMATED_TESTED` (join/token unit tests) + `LIVE_TESTED` (probe: token issue; join → count 1; re-join same cookie → count 1) | `src/app/api/rooms/[joinCode]/{join,session}/route.ts`, `src/server/rooms/joined.ts` |
+| 3 | Live question delivery through the Open Channel | `IMPLEMENTED` + `LIVE_TESTED` (probe: create/send/destroy; poll returns a new answer with `Cache-Control: no-store`) — browser relay `NEEDS_VERIFICATION` | `src/client/chat/nexconn.ts`, `src/client/chat/use-live-room.ts`, `src/lib/api/client.ts`, `src/app/join/[code]/join-room-client.tsx` |
+| 4 | Persist room/question/answer history; restore on refresh | `IMPLEMENTED` + `AUTOMATED_TESTED` (validation, API client) + `LIVE_TESTED` (probe: answer persists and is returned by the student poll; refresh restores the same participant) | Prisma schema, `src/server/questions/service.ts`, `src/app/api/rooms/[joinCode]/session/route.ts`, polling in both room clients |
+| 5 | Host sees translation; student sees translated answers | `IMPLEMENTED` + `AUTOMATED_TESTED` (provider selection, success, invalid input, HTTP/timeout/quota failures, schema) + `NEEDS_VERIFICATION` (browser GUI) — Nexconn built-in translation remains `BLOCKED` (Console capability unconfirmed; module is browser-SDK only), so the shipped provider is the key-free `mymemory` one | `src/app/api/translate/route.ts`, `src/server/translation/*`, `src/lib/translation/*`, translate control in `src/app/join/[code]/join-room-client.tsx` |
 | 6 | Host approves / hides / rejects | `IMPLEMENTED` | `src/app/api/questions/[questionId]/moderation/route.ts`, host UI |
 | 7 | Multiple students vote; duplicate votes rejected | `IMPLEMENTED` + `AUTOMATED_TESTED` (`DUPLICATE_VOTE` path) | `src/app/api/questions/[questionId]/votes/route.ts` |
 | 8 | Host answers; closed room blocks joins/submissions | `IMPLEMENTED` | `src/app/api/questions/[questionId]/answers/route.ts`, `src/app/api/rooms/[joinCode]/close/route.ts` |
@@ -394,9 +432,15 @@ the task-brief vocabulary: `IMPLEMENTED`, `PARTIALLY_IMPLEMENTED`,
   `APP_BASE_URL`, and two browser sessions.
 - The browser transport is now mounted in the student and host room pages via
   `src/client/chat/use-live-room.ts`; when the Nexconn credentials/providers are
-  absent the pages fall back to polling.
-- Translation is still disabled by default and its language coverage is
-  unverified; the `passthrough` provider keeps working as an honest fallback.
+  absent the pages fall back to polling. A failed connect is retried a bounded
+  three times (1 s / 3 s / 7 s backoff) before the badge settles on "Offline".
+- Translation has a working key-free path (`TRANSLATION_PROVIDER="mymemory"`).
+  Nexconn's **built-in** translation is still disabled by default and its
+  language coverage is unverified; the `passthrough` provider remains the
+  default and keeps working as an honest fallback.
+- **Nothing translation-related has been verified in a browser.** The provider
+  reachability probe and the unit tests are real; the GUI step is blocked
+  because no browser-automation tool is available in this environment.
 
 ---
 

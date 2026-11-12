@@ -140,6 +140,8 @@ Installed packages (verified in `node_modules`, do not reinstall or change):
 | Translation mode | Only `TranslateMode.MECHANICAL (0)` is documented/available. | [Translation tasks](https://docs.nexconn.ai/chatsdk-web/builtin-translation/translation-tasks) | — | `VERIFIED` |
 | Language code mapping | The docs use ISO 639-1 style codes (`zh`, `en`). Vaani Room's codes are ISO 639-1 as well, so they are passed through unchanged. Full coverage for `mr`, `gu`, `ta`, `te`, `bn`, `kn`, `ml`, `pa`, `or`, `ur` is not documented per language pair. | [Translation tasks](https://docs.nexconn.ai/chatsdk-web/builtin-translation/translation-tasks) | `src/lib/domain.ts` (`LANGUAGE_CODES`) | `NEEDS-CONSOLE-CONFIRMATION` — enable and test each pair |
 | Server-side translation result | Not possible: results are delivered only to the connected client. The server adapter therefore reports `unavailable` with an honest reason instead of fabricating a translation. | [Translation events and results](https://docs.nexconn.ai/chatsdk-web/builtin-translation/translation-events-and-results) | `src/server/translation/nexconn.ts` | `BLOCKED` (by design — the seam is filled by the browser transport) |
+| App-level translation (non-Nexconn) | Vaani Room ships a **key-free** provider so real translation works without any Console change or paid plan: `GET https://api.mymemory.translated.net/get?q=<text>&langpair=<src>|<tgt>` (no API key; `q` ≤ **500 bytes**; optional `de=<email>` raises the anonymous quota). Selected with `TRANSLATION_PROVIDER="mymemory"`. | [MyMemory API spec](https://mymemory.translated.net/doc/spec.php) | `src/lib/translation/mymemory.ts`, `src/server/translation/mymemory.ts`, `src/app/api/translate/route.ts`, `src/app/join/[code]/join-room-client.tsx` | `IMPLEMENTED` + `AUTOMATED_TESTED` (21 translation tests) + `LIVE-TESTED (probe)` (§I.3) — browser GUI `NEEDS_VERIFICATION` |
+| LibreTranslate as a fallback | Kept for a self-hosted endpoint. Public instances were probed live and are unusable. | [LibreTranslate API](https://libretranslate.com/docs/) | `src/server/translation/libretranslate.ts` | `BLOCKED` — no reachable public endpoint (§I.3) |
 | Billing | Translation is billed per translated character with a per-plan free allowance, charged daily. | [Built-in translation](https://docs.nexconn.ai/chatsdk-web/builtin-translation/overview) | — | `NEEDS-CONSOLE-CONFIRMATION` |
 | Fallback behaviour | If translation is unavailable, the original text stays visible. | Internal rule | `PassthroughTranslationProvider` in `src/server/translation/passthrough.ts` | `IMPLEMENTED` |
 
@@ -189,7 +191,11 @@ The eight uncertainties the task brief asked to close. Each is now either
    Console → Chat → Chat settings?"
 5. **Translation results.** They arrive on the client only, so the server
    translation adapter remains honest about being unavailable. Not a probe
-   target (needs the browser UI plus translation enabled).
+   target (needs the browser UI plus translation enabled). **Partly
+   resolved for the product:** real end-to-end translation is served by a
+   key-free provider selected as `TRANSLATION_PROVIDER="mymemory"` (see §F and
+   §I.3), so the app no longer depends on the Console toggles below. Nexconn's
+   own translation path stays `NEEDS-CONSOLE-CONFIRMATION`.
 6. **Webhook payload shapes — still `NEEDS-CONSOLE-CONFIRMATION`.** The receiver
    verifies and archives events but does not yet interpret per-event payloads.
    **Ask:** register `${APP_BASE_URL}/api/webhooks/nexconn` in the Console and
@@ -258,3 +264,30 @@ Exact steps for the team lead (each maps to a §10 report item):
 11. Enable translation in the Console and confirm a `translation.updated` event.
 12. Stop the Nexconn credentials and confirm the `local` provider and
     `passthrough` translation fall back honestly.
+
+### I.3 Translation provider reachability probe — 2026-11-12 — `LIVE-TESTED (probe)`
+
+Real HTTP requests were made (no credentials involved, no key required) to pick
+a provider for Phase 3. Only non-sensitive outcomes are recorded:
+
+| Provider | Request | Result | Conclusion |
+|---|---|---|---|
+| MyMemory (key-free) | `GET https://api.mymemory.translated.net/get?q=Good morning students&langpair=en\|hi` | HTTP **200**; `responseData.translatedText` = a real Hindi translation, `match` 0.85 | Usable server-side with **no API key** → chosen as the `mymemory` provider |
+| Google Translate web endpoint | `GET translate.googleapis.com/translate_a/single?client=gtx&...` | HTTP 200 with a real translation | Works, but it is an **undocumented** endpoint with no terms/quotas to rely on, so it was **not** used |
+| LibreTranslate — `translate.terraprint.co` | `POST /translate` | HTTP **502 Bad Gateway** | Unusable |
+| LibreTranslate — `libretranslate.com` | `POST /translate` | HTTP **400 Bad Request** | Unusable (public instance requires an API key) |
+
+Consequences:
+
+- `TRANSLATION_PROVIDER="mymemory"` is the shipped real provider
+  (`src/server/translation/mymemory.ts`, `src/lib/translation/mymemory.ts`).
+- `passthrough` stays the default and is explicitly a **development/test mode**.
+- `libretranslate` is retained only for a self-hosted endpoint.
+- The provider failure paths are enforced by unit tests
+  (`src/lib/translation/mymemory.test.ts`): HTTP error, network/timeout,
+  unparsable body, `quotaFinished`, a non-200 `responseStatus`, and an empty
+  translation all produce `unavailable`, never the original text.
+- **Not verified:** the browser GUI. No browser-automation tool is available in
+  this environment, so the translate control has been exercised only through
+  unit tests and the provider probe, never by clicking in Chrome.
+
