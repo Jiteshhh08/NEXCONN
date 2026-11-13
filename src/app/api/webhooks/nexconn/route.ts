@@ -21,8 +21,11 @@ export const dynamic = "force-dynamic";
  *   secret): `Signature = sha1(AppSecret + Nonce + Timestamp)` in the
  *   `AppKey` / `Nonce` / `Timestamp` / `Signature` headers.
  * - The signature is verified before the body is parsed.
- * - The envelope `id` is stored in `WebhookEvent.externalId` (unique), which
- *   makes repeated deliveries idempotent.
+ * - The signature covers `AppSecret + Nonce + Timestamp` only, so two ledgers
+ *   protect against replay: `WebhookEvent.externalId` makes repeated
+ *   deliveries of one event idempotent, and `WebhookEvent.nonce` rejects a
+ *   re-used signed header inside the timestamp window.
+ * - The `Timestamp` header must be within {@link WEBHOOK_TOLERANCE_MS}.
  * - Per-event payload shapes are not yet interpreted; events are archived raw
  *   until each documented payload has been confirmed against a live app.
  */
@@ -86,9 +89,12 @@ export async function POST(request: Request) {
     }
 
     const { id, type } = envelope.data;
+    const nonce = signatureHeaders.nonce;
 
-    const existing = await prisma.webhookEvent.findUnique({
-      where: { externalId: id },
+    // Two deliveries can share an event id (retry) or reuse signed headers
+    // with a different body (replay). Either is a duplicate, not new work.
+    const existing = await prisma.webhookEvent.findFirst({
+      where: { OR: [{ externalId: id }, ...(nonce ? [{ nonce }] : [])] },
       select: { id: true },
     });
 
@@ -100,6 +106,7 @@ export async function POST(request: Request) {
       await prisma.webhookEvent.create({
         data: {
           externalId: id,
+          nonce,
           eventType: type,
           payload: rawBody,
           processedAt: new Date(),

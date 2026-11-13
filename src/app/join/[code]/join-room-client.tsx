@@ -1,7 +1,7 @@
 "use client";
 
 import { ArrowUp, Check, Languages, Loader2, Radio, Send } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
 
 import { useLiveRoom } from "@/client/chat/use-live-room";
@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Field, Input, Select, Textarea } from "@/components/ui/input";
 import { ApiRequestError, apiFetch } from "@/lib/api/client";
+import { fetchRoomQuestions } from "@/lib/api/questions";
 import type { ChatConnectionConfig } from "@/lib/chat/contracts";
 import {
   getLanguage,
@@ -111,6 +112,10 @@ export function JoinRoomClient({
   const [votingId, setVotingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [roomClosed, setRoomClosed] = useState(false);
+  // Reused for a retried ask: the server deduplicates by this nonce, so a
+  // timeout followed by a retry must not create a second question.
+  const askNonceRef = useRef<string | null>(null);
   const [translationTarget, setTranslationTarget] = useState<LanguageCode>(
     hostLanguage as LanguageCode,
   );
@@ -120,10 +125,8 @@ export function JoinRoomClient({
 
   const refresh = useCallback(async () => {
     try {
-      const data = await apiFetch<{ questions: QuestionSummary[] }>(
-        `/api/rooms/${joinCode}/questions`,
-      );
-      setQuestions(data.questions);
+      const questions = await fetchRoomQuestions(joinCode);
+      setQuestions(questions);
     } catch {
       // Transient failures are retried by the next poll.
     }
@@ -186,7 +189,8 @@ export function JoinRoomClient({
     };
   }, [joined]);
 
-  const { status: liveStatus } = useLiveRoom(connectionConfig, () => {
+  const { status: liveStatus } = useLiveRoom(connectionConfig, (event) => {
+    if (event.type === "room.closed") setRoomClosed(true);
     void refresh();
   });
 
@@ -229,6 +233,8 @@ export function JoinRoomClient({
     setError(null);
     setNotice(null);
     try {
+      const nonce = askNonceRef.current ?? crypto.randomUUID();
+      askNonceRef.current = nonce;
       const data = await apiFetch<{ question: QuestionSummary }>(
         `/api/rooms/${joinCode}/questions`,
         {
@@ -237,10 +243,11 @@ export function JoinRoomClient({
             text,
             sourceLanguage: joined.participant.preferredLanguage,
             isAnonymous: askAnonymous,
-            clientNonce: crypto.randomUUID(),
+            clientNonce: nonce,
           }),
         },
       );
+      askNonceRef.current = null;
       setQuestionText("");
       setNotice("Your question is with the host for review.");
       setQuestions((current) => [
@@ -342,6 +349,7 @@ export function JoinRoomClient({
       }>("/api/translate", {
         method: "POST",
         body: JSON.stringify({
+          joinCode,
           text,
           sourceLanguage,
           targetLanguage: translationTarget,
@@ -503,6 +511,12 @@ export function JoinRoomClient({
             {notice}
           </Alert>
         ) : null}
+        {roomClosed ? (
+          <Alert tone="warning" className="mt-5" title="Room closed">
+            The host has ended this session. New questions and votes are no
+            longer accepted.
+          </Alert>
+        ) : null}
 
         <form className="mt-5 space-y-4" onSubmit={handleAsk}>
           <Field label="Your question" htmlFor="questionText">
@@ -512,6 +526,7 @@ export function JoinRoomClient({
               maxLength={1000}
               placeholder="What would you like the host to explain?"
               value={questionText}
+              disabled={roomClosed}
               onChange={(event) => setQuestionText(event.target.value)}
             />
           </Field>
@@ -522,11 +537,15 @@ export function JoinRoomClient({
                 type="checkbox"
                 className="size-4 accent-[var(--color-primary)]"
                 checked={askAnonymous}
+                disabled={roomClosed}
                 onChange={(event) => setAskAnonymous(event.target.checked)}
               />
               Ask anonymously
             </label>
-            <Button type="submit" disabled={busy === "ask"}>
+            <Button
+              type="submit"
+              disabled={busy === "ask" || roomClosed}
+            >
               {busy === "ask" ? (
                 <Loader2 aria-hidden="true" className="size-4 animate-spin" />
               ) : (
@@ -586,8 +605,6 @@ export function JoinRoomClient({
                 joined.participant.userId === question.askedByUserId;
               const canVote = question.moderationStatus === "approved";
               const questionTranslation = translations[question.id];
-              const answerKey = `${question.id}:answer`;
-              const answerTranslation = translations[answerKey];
 
               return (
                 <article
@@ -615,6 +632,12 @@ export function JoinRoomClient({
                     ) : null}
                     {isOwn ? <Badge tone="primary">Yours</Badge> : null}
                   </div>
+
+                  {question.askedByName ? (
+                    <p className="mt-2 text-xs font-medium text-muted-foreground">
+                      Asked by {question.askedByName}
+                    </p>
+                  ) : null}
 
                   <p
                     lang={language.code}
@@ -653,43 +676,62 @@ export function JoinRoomClient({
 
                   <TranslatedText state={questionTranslation} />
 
-                  {question.answer ? (
-                    <div className="mt-3 rounded-xl border border-success/25 bg-success/5 p-3">
-                      <p className="text-xs font-semibold text-success">
-                        Host answered
-                      </p>
-                      <p
-                        lang={question.answer.answerLanguage}
-                        dir={getLanguage(question.answer.answerLanguage).direction}
-                        className="mt-1 whitespace-pre-wrap text-sm leading-6 text-foreground/90"
-                      >
-                        {question.answer.answerText}
-                      </p>
-                      {question.answer.answerLanguage !== translationTarget ? (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          disabled={answerTranslation?.status === "loading"}
-                          onClick={() =>
-                            void handleTranslate(
-                              answerKey,
-                              question.answer!.answerText,
-                              question.answer!.answerLanguage,
-                            )
-                          }
-                        >
-                          {answerTranslation?.status === "loading" ? (
-                            <Loader2
-                              aria-hidden="true"
-                              className="size-4 animate-spin"
-                            />
-                          ) : (
-                            <Languages aria-hidden="true" className="size-4" />
-                          )}
-                          Translate answer
-                        </Button>
-                      ) : null}
-                      <TranslatedText state={answerTranslation} />
+                  {question.answers.length > 0 ? (
+                    <div className="mt-3 space-y-2">
+                      {question.answers.map((answer) => {
+                        const answerKey = `${question.id}:answer:${answer.id}`;
+                        const answerTranslation = translations[answerKey];
+
+                        return (
+                          <div
+                            key={answer.id}
+                            className="rounded-xl border border-success/25 bg-success/5 p-3"
+                          >
+                            <p className="text-xs font-semibold text-success">
+                              Host answered
+                            </p>
+                            <p
+                              lang={answer.answerLanguage}
+                              dir={
+                                getLanguage(answer.answerLanguage).direction
+                              }
+                              className="mt-1 whitespace-pre-wrap text-sm leading-6 text-foreground/90"
+                            >
+                              {answer.answerText}
+                            </p>
+                            {answer.answerLanguage !== translationTarget ? (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                disabled={
+                                  answerTranslation?.status === "loading"
+                                }
+                                onClick={() =>
+                                  void handleTranslate(
+                                    answerKey,
+                                    answer.answerText,
+                                    answer.answerLanguage,
+                                  )
+                                }
+                              >
+                                {answerTranslation?.status === "loading" ? (
+                                  <Loader2
+                                    aria-hidden="true"
+                                    className="size-4 animate-spin"
+                                  />
+                                ) : (
+                                  <Languages
+                                    aria-hidden="true"
+                                    className="size-4"
+                                  />
+                                )}
+                                Translate answer
+                              </Button>
+                            ) : null}
+                            <TranslatedText state={answerTranslation} />
+                          </div>
+                        );
+                      })}
                     </div>
                   ) : null}
 

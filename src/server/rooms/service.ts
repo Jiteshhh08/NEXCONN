@@ -40,6 +40,7 @@ export interface HostRoom {
 
 export interface PublicRoom {
   id: string;
+  hostUserId: string;
   title: string;
   joinCode: string;
   status: RoomStatus;
@@ -100,7 +101,12 @@ export async function createRoomForHost(
         throw error;
       }
     } catch (error) {
-      if (isJoinCodeCollision(error) && attempt < 7) continue;
+      // On the final attempt the collision must fall through to the explicit
+      // exhaustion error below instead of leaking the raw Prisma error.
+      if (isJoinCodeCollision(error)) {
+        if (attempt < 7) continue;
+        break;
+      }
       throw error;
     }
   }
@@ -133,7 +139,12 @@ export async function listRoomsForHost(hostUserId: string): Promise<HostRoom[]> 
     orderBy: { createdAt: "desc" },
     select: {
       ...roomSelection,
-      _count: { select: { questions: true, participants: true } },
+      _count: {
+        select: {
+          questions: true,
+          participants: { where: { isActive: true } },
+        },
+      },
     },
   });
 
@@ -148,7 +159,12 @@ export async function getRoomForHost(
     where: { joinCode, hostUserId },
     select: {
       ...roomSelection,
-      _count: { select: { questions: true, participants: true } },
+      _count: {
+        select: {
+          questions: true,
+          participants: { where: { isActive: true } },
+        },
+      },
     },
   });
 
@@ -162,6 +178,7 @@ export async function getPublicRoomByCode(
     where: { joinCode },
     select: {
       id: true,
+      hostUserId: true,
       title: true,
       joinCode: true,
       status: true,
@@ -169,7 +186,9 @@ export async function getPublicRoomByCode(
       createdAt: true,
       closedAt: true,
       host: { select: { displayName: true } },
-      _count: { select: { participants: true } },
+      _count: {
+        select: { participants: { where: { isActive: true } } },
+      },
     },
   });
 
@@ -177,6 +196,7 @@ export async function getPublicRoomByCode(
 
   return {
     id: room.id,
+    hostUserId: room.hostUserId,
     title: room.title,
     joinCode: room.joinCode,
     status: toStatus(room.status),
@@ -196,7 +216,9 @@ export async function getHostOverview(hostUserId: string): Promise<{
   const [activeRooms, totalQuestions, totalParticipants] = await Promise.all([
     prisma.room.count({ where: { hostUserId, status: "active" } }),
     prisma.question.count({ where: { room: { hostUserId } } }),
-    prisma.participant.count({ where: { room: { hostUserId } } }),
+    prisma.participant.count({
+      where: { room: { hostUserId }, isActive: true },
+    }),
   ]);
 
   return { activeRooms, totalQuestions, totalParticipants };
@@ -217,6 +239,13 @@ export async function closeRoomForHost(
     data: { status: "closed", closedAt: new Date() },
   });
   if (closed.count !== 1) return;
+
+  // A closed room has no active participants. Keeping the historical rows but
+  // clearing the flag makes participant counts and access checks meaningful.
+  await prisma.participant.updateMany({
+    where: { roomId: room.id, isActive: true },
+    data: { isActive: false },
+  });
 
   await publishRoomEvent(room.nexconnChannelId, room.id, "room.closed", {
     roomId: room.id,

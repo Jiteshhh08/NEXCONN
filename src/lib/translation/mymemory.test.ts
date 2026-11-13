@@ -258,6 +258,7 @@ describe("translateWithMyMemory", () => {
 describe("translateRequestSchema", () => {
   it("accepts a well formed translation request", () => {
     const parsed = translateRequestSchema.parse({
+      joinCode: "ABC123",
       text: "Good morning students",
       sourceLanguage: "en",
       targetLanguage: "mr",
@@ -269,6 +270,7 @@ describe("translateRequestSchema", () => {
   it("rejects empty text", () => {
     assert.equal(
       translateRequestSchema.safeParse({
+        joinCode: "ABC123",
         text: "   ",
         sourceLanguage: "en",
         targetLanguage: "hi",
@@ -280,6 +282,7 @@ describe("translateRequestSchema", () => {
   it("rejects text longer than the provider limit", () => {
     assert.equal(
       translateRequestSchema.safeParse({
+        joinCode: "ABC123",
         text: "a".repeat(501),
         sourceLanguage: "en",
         targetLanguage: "hi",
@@ -293,6 +296,7 @@ describe("translateRequestSchema", () => {
     // limit they passed validation and then failed inside the provider.
     assert.equal(
       translateRequestSchema.safeParse({
+        joinCode: "ABC123",
         text: "स".repeat(300),
         sourceLanguage: "mr",
         targetLanguage: "hi",
@@ -302,6 +306,7 @@ describe("translateRequestSchema", () => {
 
     assert.equal(
       translateRequestSchema.safeParse({
+        joinCode: "ABC123",
         text: "स".repeat(160),
         sourceLanguage: "mr",
         targetLanguage: "hi",
@@ -313,6 +318,7 @@ describe("translateRequestSchema", () => {
   it("rejects an unsupported target language", () => {
     assert.equal(
       translateRequestSchema.safeParse({
+        joinCode: "ABC123",
         text: "Good morning students",
         sourceLanguage: "en",
         targetLanguage: "zz",
@@ -324,6 +330,7 @@ describe("translateRequestSchema", () => {
   it("rejects unexpected extra fields", () => {
     assert.equal(
       translateRequestSchema.safeParse({
+        joinCode: "ABC123",
         text: "Good morning students",
         sourceLanguage: "en",
         targetLanguage: "hi",

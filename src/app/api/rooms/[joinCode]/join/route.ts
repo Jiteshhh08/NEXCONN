@@ -62,6 +62,18 @@ export async function POST(
 
     const session = await getSessionUser();
 
+    // A host opening their own join link must use the host console. Otherwise
+    // the same account would become a student participant in its own room and
+    // the two surfaces would disagree about the user's role.
+    if (session && session.id === room.hostUserId) {
+      throw new AppError(
+        "HOST_JOIN_NOT_ALLOWED",
+        "You host this room. Open the host console to manage it.",
+        409,
+        { path: `/host/rooms/${room.joinCode}` },
+      );
+    }
+
     // Resolve the identity and join the room in one transaction. A guest user
     // must not be created (and then orphaned) if the room closes between the
     // read above and the participant write below.

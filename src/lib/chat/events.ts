@@ -13,17 +13,29 @@ import type { LiveEventType } from "./contracts";
 
 export const LIVE_EVENT_MARKER = "vaani.live-event";
 
-/** Metadata keys attached to messages sent by the browser SDK. */
-export const MESSAGE_METADATA_KEYS = {
-  kind: "vaaniKind",
-  roomId: "vaaniRoomId",
-  clientNonce: "vaaniClientNonce",
-  sourceLanguage: "vaaniSourceLanguage",
-  isAnonymous: "vaaniIsAnonymous",
-} as const;
+/**
+ * Sender the server uses when publishing room events. The browser transport
+ * only accepts live events from this sender; a student's own channel messages
+ * are never treated as authoritative room events.
+ */
+export const SYSTEM_SENDER_USER_ID = "vaaniSystem";
 
-/** Metadata value used by a student's own question message. */
-export const QUESTION_MESSAGE_KIND = "question.created";
+const LIVE_EVENT_TYPES: readonly LiveEventType[] = [
+  "question.created",
+  "question.moderated",
+  "answer.created",
+  "vote.updated",
+  "translation.updated",
+  "room.closed",
+  "presence.updated",
+];
+
+function isLiveEventType(value: unknown): value is LiveEventType {
+  return (
+    typeof value === "string" &&
+    (LIVE_EVENT_TYPES as readonly string[]).includes(value)
+  );
+}
 
 export interface EncodedLiveEvent {
   type: LiveEventType;
@@ -55,7 +67,7 @@ export function decodeLiveEvent(text: string): EncodedLiveEvent | null {
 
   const candidate = parsed as Record<string, unknown>;
   if (candidate.vaani !== LIVE_EVENT_MARKER) return null;
-  if (typeof candidate.type !== "string") return null;
+  if (!isLiveEventType(candidate.type)) return null;
   if (typeof candidate.roomId !== "string") return null;
 
   const payload = candidate.payload;
@@ -64,7 +76,7 @@ export function decodeLiveEvent(text: string): EncodedLiveEvent | null {
   }
 
   return {
-    type: candidate.type as LiveEventType,
+    type: candidate.type,
     roomId: candidate.roomId,
     payload: payload as Record<string, unknown>,
   };

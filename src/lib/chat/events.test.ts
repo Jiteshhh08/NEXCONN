@@ -47,6 +47,20 @@ describe("encodeLiveEvent / decodeLiveEvent", () => {
     );
   });
 
+  it("rejects an unknown event type", () => {
+    assert.equal(
+      decodeLiveEvent(
+        JSON.stringify({
+          vaani: LIVE_EVENT_MARKER,
+          type: "question.deleted",
+          roomId: "r1",
+          payload: {},
+        }),
+      ),
+      null,
+    );
+  });
+
   it("rejects a Vaani event whose payload is not an object", () => {
     assert.equal(
       decodeLiveEvent(

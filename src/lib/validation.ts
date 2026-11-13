@@ -113,6 +113,20 @@ export const historyQuerySchema = z
 export type HistoryQuery = z.infer<typeof historyQuerySchema>;
 
 /**
+ * Join codes are shared by the room routes and the translate endpoint. The
+ * latter needs the code to prove the requested text belongs to a room the
+ * caller may see.
+ */
+export const joinCodeSchema = z
+  .string()
+  .trim()
+  .regex(
+    /^[A-Za-z0-9]{6,12}$/,
+    "Join codes contain 6 to 12 letters and numbers.",
+  )
+  .transform((value) => value.toUpperCase());
+
+/**
  * Translation input. The upper bound matches the providers' documented
  * 500-*byte* query limit, so oversized text is rejected at the edge with a
  * clear message instead of failing inside the provider. Counting bytes rather
@@ -121,6 +135,7 @@ export type HistoryQuery = z.infer<typeof historyQuerySchema>;
  */
 export const translateRequestSchema = z
   .object({
+    joinCode: joinCodeSchema,
     text: z
       .string()
       .trim()
@@ -135,14 +150,5 @@ export const translateRequestSchema = z
   .strict();
 
 export type TranslateRequestInput = z.infer<typeof translateRequestSchema>;
-
-export const joinCodeSchema = z
-  .string()
-  .trim()
-  .regex(
-    /^[A-Za-z0-9]{6,12}$/,
-    "Join codes contain 6 to 12 letters and numbers.",
-  )
-  .transform((value) => value.toUpperCase());
 
 export const idSchema = z.string().trim().min(1, "A valid id is required.");

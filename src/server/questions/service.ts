@@ -44,19 +44,23 @@ const questionSelect = {
   askedByUserId: true,
   originalText: true,
   sourceLanguage: true,
-  hostTranslation: true,
   isAnonymous: true,
   moderationStatus: true,
   upvoteCount: true,
   createdAt: true,
+  askedBy: { select: { displayName: true } },
   answers: {
     orderBy: { createdAt: "desc" },
-    take: 1,
     select: answerSelect,
   },
 } satisfies Prisma.QuestionSelect;
 
 type QuestionRow = Prisma.QuestionGetPayload<{ select: typeof questionSelect }>;
+
+export interface QuestionPage {
+  questions: QuestionSummary[];
+  nextCursor: string | null;
+}
 
 function isUniqueViolation(error: unknown): boolean {
   return (
@@ -90,21 +94,25 @@ function toSummary(
   const canSeeAuthor =
     (viewer.kind === "host" || viewerUserId === row.askedByUserId) &&
     (!row.isAnonymous || viewerUserId === row.askedByUserId);
-  const latestAnswer = row.answers[0];
+  // Anonymous questions hide the author's name from everyone except the
+  // author. Non-anonymous names are part of the room conversation and are
+  // shown to every viewer.
+  const canSeeAuthorName =
+    !row.isAnonymous || viewerUserId === row.askedByUserId;
 
   return {
     id: row.id,
     roomId: row.roomId,
     askedByUserId: canSeeAuthor ? row.askedByUserId : null,
+    askedByName: canSeeAuthorName ? row.askedBy.displayName : null,
     originalText: row.originalText,
     sourceLanguage: row.sourceLanguage,
-    hostTranslation: row.hostTranslation,
     isAnonymous: row.isAnonymous,
     moderationStatus: toModerationStatus(row.moderationStatus),
     upvoteCount: row.upvoteCount,
     createdAt: row.createdAt.toISOString(),
     hasVoted,
-    answer: latestAnswer ? toAnswerSummary(latestAnswer) : null,
+    answers: row.answers.map(toAnswerSummary),
   };
 }
 
@@ -124,6 +132,18 @@ export async function createQuestion(
       clientNonce: input.clientNonce,
     },
   };
+
+  // A participant who joined anonymously stays anonymous for every question,
+  // regardless of what a client sends. The client flag may only add
+  // anonymity, never remove it.
+  const participant = await prisma.participant.findUnique({
+    where: { roomId_userId: { roomId: room.id, userId: authorUserId } },
+    select: { isAnonymous: true },
+  });
+  if (!participant) {
+    throw forbidden("Join this room before asking a question.");
+  }
+  const isAnonymous = participant.isAnonymous || input.isAnonymous;
 
   const existing = await prisma.question.findUnique({
     where: nonceWhere,
@@ -150,17 +170,36 @@ export async function createQuestion(
           clientNonce: input.clientNonce,
           originalText: input.text,
           sourceLanguage: input.sourceLanguage,
-          isAnonymous: input.isAnonymous,
+          isAnonymous,
         },
         select: questionSelect,
       });
     });
 
-    await publishRoomEvent(room.nexconnChannelId, room.id, "question.created", {
-      questionId: created.id,
-      sourceLanguage: created.sourceLanguage,
-      isAnonymous: created.isAnonymous,
-    });
+    const messageId = await publishRoomEvent(
+      room.nexconnChannelId,
+      room.id,
+      "question.created",
+      {
+        questionId: created.id,
+        sourceLanguage: created.sourceLanguage,
+        isAnonymous: created.isAnonymous,
+      },
+    );
+
+    if (messageId) {
+      await prisma.question
+        .update({
+          where: { id: created.id },
+          data: { nexconnMessageId: messageId },
+        })
+        .catch((error: unknown) => {
+          console.error(
+            `[questions] Could not record the live message id for ${created.id}:`,
+            error instanceof Error ? error.message : error,
+          );
+        });
+    }
 
     return toSummary(created, viewer, false);
   } catch (error) {
@@ -192,7 +231,7 @@ export async function listQuestions(
   room: RoomAccessSnapshot,
   viewer: QuestionViewer,
   options: { limit: number; cursor?: string },
-): Promise<QuestionSummary[]> {
+): Promise<QuestionPage> {
   const where: Prisma.QuestionWhereInput = { roomId: room.id };
 
   if (viewer.kind === "student") {
@@ -227,24 +266,41 @@ export async function listQuestions(
   const rows = await prisma.question.findMany({
     where,
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-    take: options.limit,
+    // One extra row tells us whether another page exists without a second
+    // query and without returning an empty page to the client.
+    take: options.limit + 1,
     select: questionSelect,
   });
 
-  if (viewer.kind !== "student" || rows.length === 0) {
-    return rows.map((row) => toSummary(row, viewer, false));
+  const hasMore = rows.length > options.limit;
+  const pageRows = hasMore ? rows.slice(0, options.limit) : rows;
+  const nextCursor =
+    hasMore && pageRows.length > 0
+      ? (pageRows[pageRows.length - 1]?.id ?? null)
+      : null;
+
+  if (viewer.kind !== "student" || pageRows.length === 0) {
+    return {
+      questions: pageRows.map((row) => toSummary(row, viewer, false)),
+      nextCursor,
+    };
   }
 
   const votes = await prisma.vote.findMany({
     where: {
       userId: viewer.userId,
-      questionId: { in: rows.map((row) => row.id) },
+      questionId: { in: pageRows.map((row) => row.id) },
     },
     select: { questionId: true },
   });
   const voted = new Set(votes.map((vote) => vote.questionId));
 
-  return rows.map((row) => toSummary(row, viewer, voted.has(row.id)));
+  return {
+    questions: pageRows.map((row) =>
+      toSummary(row, viewer, voted.has(row.id)),
+    ),
+    nextCursor,
+  };
 }
 
 export async function moderateQuestion(
@@ -382,10 +438,29 @@ export async function createAnswer(
     });
   });
 
-  await publishRoomEvent(room.nexconnChannelId, room.id, "answer.created", {
-    questionId: question.id,
-    answerId: answer.id,
-  });
+  const messageId = await publishRoomEvent(
+    room.nexconnChannelId,
+    room.id,
+    "answer.created",
+    {
+      questionId: question.id,
+      answerId: answer.id,
+    },
+  );
+
+  if (messageId) {
+    await prisma.answer
+      .update({
+        where: { id: answer.id },
+        data: { nexconnMessageId: messageId },
+      })
+      .catch((error: unknown) => {
+        console.error(
+          `[questions] Could not record the live message id for answer ${answer.id}:`,
+          error instanceof Error ? error.message : error,
+        );
+      });
+  }
 
   return toAnswerSummary(answer);
 }

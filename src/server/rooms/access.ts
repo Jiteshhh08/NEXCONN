@@ -121,10 +121,10 @@ export async function assertRoomParticipant(
 ): Promise<{ preferredLanguage: string; isAnonymous: boolean }> {
   const participant = await prisma.participant.findUnique({
     where: { roomId_userId: { roomId, userId } },
-    select: { preferredLanguage: true, isAnonymous: true },
+    select: { preferredLanguage: true, isAnonymous: true, isActive: true },
   });
 
-  if (!participant) {
+  if (!participant || !participant.isActive) {
     throw forbidden("Join this room before taking part.");
   }
 

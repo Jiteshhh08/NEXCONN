@@ -1,5 +1,7 @@
 import "server-only";
 
+import { createHash } from "node:crypto";
+
 import { serverEnv } from "@/lib/env";
 
 import { resolveClientIp } from "./client-ip";
@@ -97,11 +99,53 @@ function getTrustedClientIp(request: Request): string | null {
 }
 
 /**
- * Client key for coarse abuse limiting, never for authorization. When no
- * trusted proxy header is configured, every request shares the `untrusted`
- * key: one conservative bucket is safer than letting clients choose their own.
+ * Reads a cookie value without importing the session module. Keeping this
+ * local avoids a cycle and keeps the limiter usable from any route.
+ */
+function readCookie(cookieHeader: string | null, name: string): string | null {
+  if (!cookieHeader) return null;
+
+  for (const part of cookieHeader.split(";")) {
+    const [key, ...rest] = part.trim().split("=");
+    if (key === name) {
+      const value = rest.join("=");
+      return value.length > 0 ? value : null;
+    }
+  }
+
+  return null;
+}
+
+function fingerprint(value: string): string {
+  return createHash("sha256").update(value).digest("hex").slice(0, 32);
+}
+
+/**
+ * Client key for coarse abuse limiting, never for authorization.
+ *
+ * When a trusted proxy header is configured, the address is used. Otherwise
+ * the limiter falls back to the session cookie (stable and costly to forge for
+ * a signed-in or joined browser) and then to a hash of request hints. There is
+ * deliberately no shared `untrusted` bucket: a global bucket lets one client
+ * exhaust the limit for every user on the deployment.
  */
 export function getClientKey(request: Request, scope: string): string {
   const ip = getTrustedClientIp(request);
-  return `${scope}:${ip ?? "untrusted"}`;
+  if (ip) return `${scope}:ip:${ip}`;
+
+  const sessionToken = readCookie(
+    request.headers.get("cookie"),
+    "vaani_session",
+  );
+  if (sessionToken) {
+    return `${scope}:session:${fingerprint(sessionToken)}`;
+  }
+
+  const hints = [
+    request.headers.get("user-agent") ?? "",
+    request.headers.get("accept-language") ?? "",
+    request.headers.get("sec-ch-ua") ?? "",
+  ].join("\n");
+
+  return `${scope}:fingerprint:${fingerprint(hints)}`;
 }

@@ -29,6 +29,24 @@ export async function POST(request: Request) {
 
     const input = await parseJson(request, loginHostSchema);
 
+    // A second bucket scoped to the account prevents one client from spreading
+    // guesses across many addresses, and prevents a distributed attack from
+    // hammering a single account. The email is already normalised by the
+    // schema (trimmed and lower-cased).
+    const accountLimit = checkRateLimit(
+      `login:account:${input.email}`,
+      5,
+      15 * 60 * 1000,
+    );
+    if (!accountLimit.allowed) {
+      throw new AppError(
+        "RATE_LIMITED",
+        "Too many sign-in attempts. Please try again later.",
+        429,
+        { retryAfterSeconds: accountLimit.retryAfterSeconds },
+      );
+    }
+
     const user = await prisma.user.findUnique({
       where: { email: input.email },
       select: {

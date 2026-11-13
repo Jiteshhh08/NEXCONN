@@ -20,15 +20,20 @@ export interface QuestionSummary {
   roomId: string;
   /** Null for an anonymous question the viewer did not ask. */
   askedByUserId: string | null;
+  /**
+   * The author's display name when the viewer is allowed to see it. Null for
+   * anonymous questions (except to their author) and for authors without a
+   * name.
+   */
+  askedByName: string | null;
   originalText: string;
   sourceLanguage: string;
-  hostTranslation: string | null;
   isAnonymous: boolean;
   moderationStatus: ModerationStatus;
   upvoteCount: number;
   createdAt: string;
   hasVoted: boolean;
-  answer: AnswerSummary | null;
+  answers: AnswerSummary[];
 }
 
 export interface RoomChatSession {

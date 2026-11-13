@@ -7,7 +7,6 @@ import {
   MessageType,
   NCEngine,
   OpenChannel,
-  SendTextMessageParams,
   TranslateHandler,
   TranslateMessageParam,
   TranslateSourceType,
@@ -20,11 +19,9 @@ import type {
   ChatClientTransport,
   ChatConnectionConfig,
   LiveEvent,
-  SendQuestionInput,
 } from "@/lib/chat/contracts";
 import {
-  MESSAGE_METADATA_KEYS,
-  QUESTION_MESSAGE_KIND,
+  SYSTEM_SENDER_USER_ID,
   decodeLiveEvent,
 } from "@/lib/chat/events";
 
@@ -91,31 +88,6 @@ export class NexconnChatTransport implements ChatClientTransport {
     }
 
     this.channel = channel;
-  }
-
-  async sendQuestion(input: SendQuestionInput): Promise<{ messageId: string }> {
-    const channel = this.channel;
-    if (!channel) {
-      throw new Error("Join the room channel before sending a question.");
-    }
-
-    const params = new SendTextMessageParams({ text: input.text });
-    params.metadata = {
-      [MESSAGE_METADATA_KEYS.kind]: QUESTION_MESSAGE_KIND,
-      [MESSAGE_METADATA_KEYS.roomId]: input.roomId,
-      [MESSAGE_METADATA_KEYS.clientNonce]: input.clientNonce,
-      [MESSAGE_METADATA_KEYS.sourceLanguage]: input.sourceLanguage,
-      [MESSAGE_METADATA_KEYS.isAnonymous]: input.isAnonymous ? "true" : "false",
-    };
-
-    const result = await channel.sendMessage(params);
-    if (!result.isOk || !result.data) {
-      throw new Error(
-        `Sending the question failed (${result.code}): ${result.msg}`,
-      );
-    }
-
-    return { messageId: result.data.messageId };
   }
 
   onEvent(listener: (event: LiveEvent) => void): () => void {
@@ -205,6 +177,11 @@ export class NexconnChatTransport implements ChatClientTransport {
     for (const message of messages) {
       if (message.messageType !== MessageType.TEXT) continue;
 
+      // Only the Vaani server may publish authoritative room events. Without
+      // this check any channel member could forge "room.closed" or moderation
+      // events by posting the same JSON.
+      if (message.senderUserId !== SYSTEM_SENDER_USER_ID) continue;
+
       const content = message.content as TextMessageContent | undefined;
       const text = content?.text;
       if (typeof text !== "string") continue;
@@ -212,10 +189,14 @@ export class NexconnChatTransport implements ChatClientTransport {
       const decoded = decodeLiveEvent(text);
       if (!decoded) continue;
 
+      // The event must belong to this room; a sender cannot redirect the
+      // client to another room by claiming a different id.
+      if (decoded.roomId !== config.roomId) continue;
+
       this.emit({
         id: message.messageId,
         type: decoded.type,
-        roomId: decoded.roomId || config.roomId,
+        roomId: config.roomId,
         payload: decoded.payload,
         createdAt: new Date(message.sentTime).toISOString(),
       });

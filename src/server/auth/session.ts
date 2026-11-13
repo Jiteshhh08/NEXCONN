@@ -99,6 +99,17 @@ export async function getSessionUser(): Promise<SessionUser | null> {
     return null;
   }
 
+  // `lastSeenAt` is meaningful only if it is actually written. Throttle the
+  // update so a polling room board does not write on every request.
+  if (Date.now() - session.lastSeenAt.getTime() > 5 * 60 * 1000) {
+    await prisma.session
+      .update({
+        where: { id: session.id },
+        data: { lastSeenAt: new Date() },
+      })
+      .catch(() => undefined);
+  }
+
   return toSessionUser(session.user);
 }
 

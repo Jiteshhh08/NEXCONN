@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import type { Metadata } from "next";
 import Link from "next/link";
+import { redirect } from "next/navigation";
 
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -16,6 +17,7 @@ import { Card } from "@/components/ui/card";
 import { getLanguage } from "@/lib/domain";
 import { formatDate } from "@/lib/format";
 import { joinCodeSchema } from "@/lib/validation";
+import { getSessionUser } from "@/server/auth/session";
 import { getPublicRoomByCode } from "@/server/rooms/service";
 
 import { JoinRoomClient } from "./join-room-client";
@@ -42,6 +44,13 @@ export default async function JoinRoomPage({
   const room = await getPublicRoomByCode(parsed.data);
   if (!room) {
     return <MissingRoom code={parsed.data} />;
+  }
+
+  // Opening your own share link must not turn the host into a student entry in
+  // their own room. Send the owner to the console that controls this room.
+  const user = await getSessionUser();
+  if (user && user.id === room.hostUserId) {
+    redirect(`/host/rooms/${room.joinCode}`);
   }
 
   const hostLanguage = getLanguage(room.hostLanguage);

@@ -42,7 +42,7 @@ export async function GET(
     const joined = await buildJoinedRoom({
       room,
       userId: user.id,
-      role: user.role,
+      role: "student",
       displayName: user.displayName,
       preferredLanguage: participant.preferredLanguage,
       isAnonymous: participant.isAnonymous,

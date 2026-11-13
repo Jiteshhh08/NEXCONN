@@ -20,6 +20,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Field, Select, Textarea } from "@/components/ui/input";
 import { ApiRequestError, apiFetch } from "@/lib/api/client";
+import { fetchRoomQuestions } from "@/lib/api/questions";
 import type { ChatConnectionConfig } from "@/lib/chat/contracts";
 import {
   getLanguage,
@@ -30,7 +31,11 @@ import {
   type RoomStatus,
 } from "@/lib/domain";
 import { formatDateTime } from "@/lib/format";
-import type { QuestionSummary, RoomChatSession } from "@/lib/room/types";
+import type {
+  AnswerSummary,
+  QuestionSummary,
+  RoomChatSession,
+} from "@/lib/room/types";
 
 const POLL_INTERVAL_MS = 6000;
 
@@ -78,10 +83,8 @@ export function HostRoomClient({
 
   const refresh = useCallback(async () => {
     try {
-      const data = await apiFetch<{ questions: QuestionSummary[] }>(
-        `/api/rooms/${joinCode}/questions`,
-      );
-      setQuestions(data.questions);
+      const questions = await fetchRoomQuestions(joinCode);
+      setQuestions(questions);
     } catch {
       // Transient failures are retried by the next poll.
     }
@@ -127,7 +130,11 @@ export function HostRoomClient({
     };
   }, [chat, roomId]);
 
-  const { status: liveStatus } = useLiveRoom(connectionConfig, () => {
+  const { status: liveStatus } = useLiveRoom(connectionConfig, (event) => {
+    if (event.type === "room.closed") {
+      setStatus("closed");
+      setAnswerFor(null);
+    }
     void refresh();
   });
 
@@ -175,7 +182,7 @@ export function HostRoomClient({
     setError(null);
     setNotice(null);
     try {
-      const data = await apiFetch<{ answer: QuestionSummary["answer"] }>(
+      const data = await apiFetch<{ answer: AnswerSummary }>(
         `/api/questions/${answerFor}/answers`,
         {
           method: "POST",
@@ -189,7 +196,9 @@ export function HostRoomClient({
       const questionId = answerFor;
       setQuestions((current) =>
         current.map((item) =>
-          item.id === questionId ? { ...item, answer: data.answer } : item,
+          item.id === questionId
+            ? { ...item, answers: [data.answer, ...item.answers] }
+            : item,
         ),
       );
       setAnswerFor(null);
@@ -282,7 +291,7 @@ export function HostRoomClient({
               ordered.map((question) => {
                 const language = getLanguage(question.sourceLanguage);
                 const isPending = question.moderationStatus === "pending";
-                const isAnswered = question.answer !== null;
+                const isAnswered = question.answers.length > 0;
 
                 return (
                   <article
@@ -314,6 +323,12 @@ export function HostRoomClient({
                       ) : null}
                     </div>
 
+                    {question.askedByName ? (
+                      <p className="mt-2 text-xs font-medium text-muted-foreground">
+                        Asked by {question.askedByName}
+                      </p>
+                    ) : null}
+
                     <p
                       lang={language.code}
                       dir={language.direction}
@@ -322,20 +337,27 @@ export function HostRoomClient({
                       {question.originalText}
                     </p>
 
-                    {question.answer ? (
-                      <div className="mt-3 rounded-xl border border-success/25 bg-success/5 p-3">
-                        <p className="text-xs font-semibold text-success">
-                          Your answer
-                        </p>
-                        <p
-                          lang={question.answer.answerLanguage}
-                          dir={
-                            getLanguage(question.answer.answerLanguage).direction
-                          }
-                          className="mt-1 whitespace-pre-wrap text-sm leading-6 text-foreground/90"
-                        >
-                          {question.answer.answerText}
-                        </p>
+                    {question.answers.length > 0 ? (
+                      <div className="mt-3 space-y-2">
+                        {question.answers.map((answer) => (
+                          <div
+                            key={answer.id}
+                            className="rounded-xl border border-success/25 bg-success/5 p-3"
+                          >
+                            <p className="text-xs font-semibold text-success">
+                              Your answer
+                            </p>
+                            <p
+                              lang={answer.answerLanguage}
+                              dir={
+                                getLanguage(answer.answerLanguage).direction
+                              }
+                              className="mt-1 whitespace-pre-wrap text-sm leading-6 text-foreground/90"
+                            >
+                              {answer.answerText}
+                            </p>
+                          </div>
+                        ))}
                       </div>
                     ) : null}
 

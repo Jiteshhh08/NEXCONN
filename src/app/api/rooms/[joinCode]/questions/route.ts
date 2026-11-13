@@ -6,7 +6,7 @@ import {
   submitQuestionSchema,
   type HistoryQuery,
 } from "@/lib/validation";
-import { checkRateLimit, getClientKey } from "@/server/auth/rate-limit";
+import { checkRateLimit } from "@/server/auth/rate-limit";
 import { getSessionUser } from "@/server/auth/session";
 import {
   createQuestion,
@@ -60,8 +60,8 @@ export async function GET(
     const user = await getSessionUser();
 
     if (user && user.id === room.hostUserId) {
-      const questions = await listQuestions(room, { kind: "host" }, query);
-      return apiSuccess({ questions });
+      const page = await listQuestions(room, { kind: "host" }, query);
+      return apiSuccess(page);
     }
 
     if (!user) {
@@ -69,13 +69,13 @@ export async function GET(
     }
 
     await assertRoomParticipant(room.id, user.id);
-    const questions = await listQuestions(
+    const page = await listQuestions(
       room,
       { kind: "student", userId: user.id },
       query,
     );
 
-    return apiSuccess({ questions });
+    return apiSuccess(page);
   } catch (error) {
     return apiError(error);
   }
@@ -94,7 +94,7 @@ export async function POST(
     const participant = await requireRoomParticipant(room);
 
     const limit = checkRateLimit(
-      getClientKey(request, "question"),
+      `question:${participant.id}`,
       20,
       60 * 1000,
     );

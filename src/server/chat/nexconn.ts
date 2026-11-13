@@ -9,7 +9,7 @@ import type {
   PublishEventInput,
   ServerChatProvider,
 } from "@/lib/chat/contracts";
-import { encodeLiveEvent } from "@/lib/chat/events";
+import { encodeLiveEvent, SYSTEM_SENDER_USER_ID } from "@/lib/chat/events";
 import {
   nexconnRequest,
   readNexconnCredentials,
@@ -34,15 +34,6 @@ import {
 
 /** Nexconn built-in plain-text message object name. */
 const TEXT_MESSAGE_TYPE = "RC:TxtMsg";
-
-/**
- * Sender used for server-published room events. The server API allows sending
- * to an open channel without the sender being a member.
- *
- * UNVERIFIED: the docs do not state whether `fromUserId` must be a registered
- * user. Confirm against a live application before relying on this value.
- */
-const SYSTEM_SENDER_USER_ID = "vaaniSystem";
 
 /** Nexconn caps a user's display `name` at 64 characters. */
 const MAX_USER_NAME_LENGTH = 64;

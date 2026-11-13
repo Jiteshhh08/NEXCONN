@@ -14,6 +14,18 @@ const SALT_LENGTH = 16;
 const SCHEME = "scrypt";
 
 /**
+ * Fixed salt used when there is no real hash to verify. Running the same
+ * scrypt work for an unknown email or a malformed hash keeps the response time
+ * close to a failed password check, so login cannot be used to enumerate
+ * accounts by timing.
+ */
+const DUMMY_SALT = Buffer.alloc(SALT_LENGTH, 7);
+
+async function burnPasswordWork(password: string): Promise<void> {
+  await scrypt(password, DUMMY_SALT, KEY_LENGTH);
+}
+
+/**
  * Hashes a password with scrypt and a random salt.
  * Format: scrypt$<salt base64url>$<hash base64url>
  */
@@ -32,14 +44,21 @@ export async function verifyPassword(
   password: string,
   storedHash: string | null | undefined,
 ): Promise<boolean> {
-  if (!storedHash) return false;
+  if (!storedHash) {
+    await burnPasswordWork(password);
+    return false;
+  }
 
   const [scheme, saltPart, hashPart] = storedHash.split("$");
-  if (scheme !== SCHEME || !saltPart || !hashPart) return false;
+  if (scheme !== SCHEME || !saltPart || !hashPart) {
+    await burnPasswordWork(password);
+    return false;
+  }
 
   const salt = Buffer.from(saltPart, "base64url");
   const expected = Buffer.from(hashPart, "base64url");
   if (salt.length !== SALT_LENGTH || expected.length !== KEY_LENGTH) {
+    await burnPasswordWork(password);
     return false;
   }
 

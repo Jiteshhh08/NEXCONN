@@ -76,23 +76,17 @@ export interface ChatConnectionConfig {
   provider: ChatProviderName;
 }
 
-export interface SendQuestionInput {
-  roomId: string;
-  text: string;
-  sourceLanguage: string;
-  isAnonymous: boolean;
-  clientNonce: string;
-}
-
 /**
- * Browser-side transport contract. Phase 3 provides the local SSE
- * implementation and the Nexconn Chat SDK implementation.
+ * Browser-side transport contract.
+ *
+ * Deliberately read-only: questions travel through the authenticated API so
+ * they can be moderated and persisted. The live channel only carries
+ * server-published events.
  */
 export interface ChatClientTransport {
   readonly name: ChatProviderName;
   connect(config: ChatConnectionConfig): Promise<void>;
   joinChannel(): Promise<void>;
-  sendQuestion(input: SendQuestionInput): Promise<{ messageId: string }>;
   onEvent(listener: (event: LiveEvent) => void): () => void;
   disconnect(): void;
 }

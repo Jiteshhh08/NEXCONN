@@ -17,15 +17,22 @@ export async function publishRoomEvent(
   roomId: string,
   type: LiveEventType,
   payload: Record<string, unknown>,
-): Promise<void> {
-  if (!channelId) return;
+): Promise<string | null> {
+  if (!channelId) return null;
 
   try {
-    await getChatProvider().publishEvent({ channelId, roomId, type, payload });
+    const published = await getChatProvider().publishEvent({
+      channelId,
+      roomId,
+      type,
+      payload,
+    });
+    return published.messageId;
   } catch (error) {
     console.error(
       `[chat] Failed to publish ${type} for room ${roomId}:`,
       error instanceof Error ? error.message : error,
     );
+    return null;
   }
 }

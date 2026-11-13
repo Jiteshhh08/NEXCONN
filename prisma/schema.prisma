@@ -92,7 +92,6 @@ model Question {
   clientNonce      String?
   originalText     String
   sourceLanguage   String
-  hostTranslation  String?
   isAnonymous      Boolean  @default(false)
   moderationStatus String   @default("pending")
   upvoteCount      Int      @default(0)
@@ -179,6 +178,7 @@ model MessageTranslation {
 model WebhookEvent {
   id           String    @id @default(cuid())
   externalId   String    @unique
+  nonce        String?   @unique
   eventType    String
   payload      String
   processedAt  DateTime?
